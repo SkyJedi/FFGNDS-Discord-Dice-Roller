@@ -65,13 +65,6 @@ const onInteraction = async ({ interaction, client }) => {
     //get channelEmoji
     let channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(console.error);
 
-    //check for Patron
-    const member = await main.checkWithBabyBot(interaction.user.id);
-
-    if (member) {
-        channelEmoji += 'Patreon';
-    }
-
     console.log(`${interaction.user.username}, ${command}, ${new Date()}`);
 
 //************************COMMANDS START HERE************************
@@ -110,14 +103,11 @@ const onInteraction = async ({ interaction, client }) => {
     }
     switch (channelEmoji) {
         case 'swrpg':
-        case 'swrpgPatreon':
         case 'genesys':
-        case 'genesysPatreon':
             if (SW_GENESYS_COMMANDS.includes(command)) recognized = true;
             await swCommands({ client, interaction, command, channelEmoji });
             break;
         case 'l5r':
-        case 'l5rPatreon':
             if (L5R_COMMANDS.includes(command)) recognized = true;
             await l5rCommands({ client, interaction, command, channelEmoji });
             break;

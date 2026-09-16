@@ -87,19 +87,13 @@ const buttons = [
 const build = async (client) => {
     const swrpg = await getEmoji('swrpg', client, dice);
     const genesys = await getEmoji('genesys', client, dice);
-    const swrpgPatreon = await getEmoji('swrpgPatreon', client, dice);
-    const genesysPatreon = await getEmoji('genesysPatreon', client, dice);
     const buttonEmoji = await getEmoji('buttonEmoji', client, buttons);
     const l5r = await getEmoji('l5r', client, l5rDice);
-    const l5rPatreon = await getEmoji('l5rPatreon', client, l5rDice);
     fs.writeFile(`./emoji.json`, JSON.stringify({
         swrpg,
-        swrpgPatreon,
         genesys,
-        genesysPatreon,
         buttonEmoji,
-        l5r,
-        l5rPatreon
+        l5r
     }), () => console.log('The file has been saved!'));
 };
 

@@ -5,6 +5,12 @@ const { ShardingManager } = require('discord.js');
 const manager = new ShardingManager(path.join(__dirname, '/index.js'), { token });
 console.info(new Date().toString());
 
+//this is the top-level manager process (separate from each shard's own child process spawned
+//below) - a safety net here too so a bug in this file's own event handlers can't silently kill
+//the process that's responsible for respawning shards
+process.on('unhandledRejection', (error) => console.error('Unhandled promise rejection in ShardingManager:', error));
+process.on('uncaughtException', (error) => console.error('Uncaught exception in ShardingManager:', error));
+
 manager.spawn().catch(console.error);
 
 manager.on('shardCreate', (shard) => {
@@ -21,6 +27,13 @@ manager.on('shardCreate', (shard) => {
     shard.on('disconnect', (event) => {
         console.warn('Shard ' + shard.id + ' disconnected. Dumping socket close event...');
         console.log(event);
+    });
+
+    //logged mainly so a slow reconnect (Discord backoff, session invalidation, network issues)
+    //is visible as a gateway-level reconnect rather than looking identical to a full process
+    //death+respawn in the logs
+    shard.on('reconnecting', () => {
+        console.warn('Shard ' + shard.id + ' is reconnecting to the gateway...');
     });
 
     shard.on('ready', async () => {

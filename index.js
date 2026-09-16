@@ -3,8 +3,7 @@
   For Custom Discord Bots please email me at Astrydax@gmail.com
 */
 const { Client, Options, Partials, GatewayIntentBits, EmbedBuilder, Colors } = require('discord.js');
-const { Patreon, token, babyBotToken } = require('./config');
-const axios = require('axios');
+const { token } = require('./config');
 const handlers = require('./handlers');
 
 const ClientOptions = {
@@ -18,33 +17,29 @@ const ClientOptions = {
 };
 const client = new Client(ClientOptions);
 
+//none of the interactionCreate/messageCreate/threadCreate listeners below are awaited by
+//discord.js, and none of the handler chains they call into (onInteraction's command switch,
+//onComponent's per-module button routers, ...) wrap themselves in try/catch - so a single
+//rejected editReply/followUp/etc. anywhere in that chain (a stale interaction token, a Discord
+//API hiccup, a bug) becomes an unhandled promise rejection. Node crashes the whole process on
+//those by default, which looks like the shard randomly dying and needing a full respawn+reconnect
+//instead of just failing that one interaction - these .catch()s and the process-level handlers
+//below keep a single bad interaction from taking the shard down.
+process.on('unhandledRejection', (error) => console.error('Unhandled promise rejection:', error));
+process.on('uncaughtException', (error) => console.error('Uncaught exception:', error));
+
 client.login(token).catch(error => console.error(error));
 
 // Register our event handlers (defined below):
-client.on('interactionCreate', interaction => handlers.onInteraction({ interaction, client }));
-client.on('messageCreate', message => handlers.onLegacyMessage({ message, client }));
+client.on('interactionCreate', interaction => handlers.onInteraction({ interaction, client }).catch(console.error));
+client.on('messageCreate', message => handlers.onLegacyMessage({ message, client }).catch(console.error));
 client.on('clientReady', async () => {
-    //const guild = await client.guilds.fetch(Patreon.guild);
-    //await guild.members.fetch().catch(console.error);
 });
 
 client.on('threadCreate', async (thread) => {
-        if (thread.joinable) await thread.join();
+        if (thread.joinable) await thread.join().catch(console.error);
     }
 );
-
-const checkWithBabyBot = async (userId = '') => {
-    const response = await axios.get(`https://discordapp.com/api/guilds/${Patreon.guild}/members/${userId}`, {
-        'headers': { 'Authorization': `Bot ${babyBotToken}` },
-        'timeout': 1000
-    }).catch(()=> {});
-    if (response && response.data && response.data.roles) {
-        if (response.data.roles.some(role => role === Patreon.role)) {
-            if(response.data.nick) return response.data.nick;
-            else return response.data.user.username
-        }
-    }
-};
 
 //tracks which interactions we've already sent an initial response to, so repeated calls know to
 //follow up with a new message instead of racing to edit the same one. interaction.replied only flips
@@ -83,5 +78,4 @@ const sendMessage = ({ interaction, embed, text, attachment }) => {
 exports.respond = respond;
 exports.sendMessage = sendMessage;
 exports.textEmbed = textEmbed;
-exports.checkWithBabyBot = checkWithBabyBot;
 
