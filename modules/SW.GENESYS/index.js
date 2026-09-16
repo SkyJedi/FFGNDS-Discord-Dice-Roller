@@ -16,6 +16,7 @@ exports.trigger = require('./trigger');
 exports.reroll = require('./reroll').reroll;
 exports.rerollComponent = require('./reroll').onComponent;
 exports.roll = require('./roll').roll;
+exports.oldRoll = require('./roll').oldRoll;
 exports.rollComponent = require('./roll').onComponent;
 exports.rollCore = require('./roll').rollCore;
 exports.printResults = require('./roll').printResults;

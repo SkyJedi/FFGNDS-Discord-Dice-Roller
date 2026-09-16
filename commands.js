@@ -43,6 +43,16 @@ const commands = [
         new SlashCommandBuilder().setName('shipcrit').setDescription('Rolls and displays a ship critical hit (SWRPG/Genesys channels).'),
         '+10, -10, or 54? to look up a specific roll'
     ),
+    // /oldroll is the pre-button-UI free-text dice code /roll used to use, kept for players who'd
+    // rather type a code than click through the button pool builder - see
+    // modules/SW.GENESYS/roll.js's oldRoll().
+    new SlashCommandBuilder()
+        .setName('oldroll')
+        .setDescription('Rolls dice using the old dice-code syntax, e.g. yygggrrpp (SWRPG/Genesys channels).')
+        .addStringOption(option =>
+            option.setName('input').setDescription('Dice code, e.g. yygggrrpp or 2y 3g 2r 2p').setRequired(true))
+        .addStringOption(option =>
+            option.setName('text').setDescription('Assigns a label to the roll. (optional)')),
     // /species and /gleepglop are the same command under two names (a holdover from the old
     // !species/!gleepglop prefix aliases - slash commands can't alias one another, so both are
     // registered separately). See modules/SW.GENESYS/commands.js's dispatch switch.

@@ -1,6 +1,6 @@
 const config = require('../../config.json');
 const { diceFaces, order, symbols } = require('./');
-const { dice, emoji, sleep, writeData, asMessageRef } = require('../');
+const { dice, emoji, sleep, writeData, asMessageRef, getParams } = require('../');
 const { readData } = require('../data');
 const { flatten } = require('lodash');
 const {
@@ -413,6 +413,31 @@ const roll = async ({ interaction }) => {
     await safeEditReply(interaction, (iconsOk) => buildMainScreen(emptyState(), iconsOk));
 };
 
+//Slash command entry point for /oldroll (SWRPG/Genesys channels) - the pre-button-UI free-text
+//dice code (e.g. "yygggrrpp"), kept for players who'd rather type a code than click through the
+//button pool builder that /roll opens today.
+const oldRoll = async ({ interaction, client, channelEmoji }) => {
+    const params = getParams(interaction);
+    const desc = interaction.options.getString('text');
+    const messageRef = asMessageRef(interaction);
+
+    const result = rollCore({ params, channelEmoji });
+    if (result.error) {
+        await interaction.editReply({ embeds: [textEmbed(result.error)] });
+        return;
+    }
+
+    writeData(client, messageRef, 'diceResult', result.diceResult.roll);
+    const rollLine = `${displayName(interaction)} rolls${desc ? `: ${desc}` : ''}`;
+
+    //show the animated gif faces first, then swap to the static faces once they've had a
+    //moment to play - matches /roll's button-driven two-stage reveal
+    await interaction.editReply({ embeds: [buildRollResultEmbed(rollLine, result.textGif || result.faces)] });
+    await sleep(1200);
+    const resultsLine = result.response.length > 0 ? result.response : 'All dice have cancelled out';
+    await interaction.editReply({ embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)] });
+};
+
 //---------------------------------------------------------------- roll builder router
 
 const onComponent = async ({ interaction, client }) => {
@@ -486,6 +511,7 @@ const onComponent = async ({ interaction, client }) => {
 };
 
 exports.roll = roll;
+exports.oldRoll = oldRoll;
 exports.onComponent = onComponent;
 exports.rollCore = rollCore;
 exports.processType = processType;

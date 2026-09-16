@@ -20,12 +20,14 @@
     "start": "node start.js",
     "debug": "nodemon start.js",
     "deploy-commands": "node deploy-commands.js",
+    "deploy-commands-sharding": "node deploy-commands-sharding.js",
     "Docker Watch": "nodemon --exec \"docker compose up -d --build\"",
     "docker:build": "docker compose build",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f",
-    "docker:deploy-commands": "docker compose run --rm dice-roller node deploy-commands.js"
+    "docker:deploy-commands": "docker compose run --rm dice-roller node deploy-commands.js",
+    "docker:deploy-commands-sharding": "docker compose run --rm dice-roller node deploy-commands-sharding.js"
   },
   "nodemonConfig": {
     "ignore": [

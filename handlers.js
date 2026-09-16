@@ -16,7 +16,7 @@ const l5rRollComponent = require('./modules/L5R/').rollComponent;
 const l5rRerollComponent = require('./modules/L5R/').rerollComponent;
 
 const SYSTEM_AGNOSTIC_COMMANDS = ['stats', 'ver', 'poly', 'swrpg', 'genesys', 'l5r', 'invite', 'help', 'roll'];
-const SW_GENESYS_COMMANDS = ['character', 'crit', 'shipcrit', 'species', 'gleepglop', 'destiny', 'story', 'initiative', 'reroll', 'obligation', 'duty'];
+const SW_GENESYS_COMMANDS = ['character', 'crit', 'shipcrit', 'species', 'gleepglop', 'destiny', 'story', 'initiative', 'reroll', 'obligation', 'duty', 'oldroll'];
 const L5R_COMMANDS = ['keep', 'add', 'reroll'];
 const ADMIN_COMMANDS = ['restart', 'build'];
 
