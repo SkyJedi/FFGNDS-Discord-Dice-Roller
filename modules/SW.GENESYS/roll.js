@@ -171,7 +171,8 @@ const buildResultText = ({ roll, results }, channelEmoji) => {
     return { faces, response };
 };
 
-//interaction-based display, still used directly by reroll.js's remove/select/fortune cases
+//interaction-based display - no longer called anywhere now that reroll.js has its own button
+//menu, but kept exported for anything that still wants a plain roll+results announcement
 const printResults = ({ roll, results }, interaction, desc, channelEmoji, messageGif) => {
     const main = require('../../index');
     const { faces, response } = buildResultText({ roll, results }, channelEmoji);
@@ -180,7 +181,12 @@ const printResults = ({ roll, results }, interaction, desc, channelEmoji, messag
         main.respond(interaction, 'No dice rolled.');
         return;
     }
-    if (messageGif) messageGif.edit({ embeds: [main.textEmbed(finalText(faces))] }).catch(console.error);
+    //edit via the interaction's webhook, not messageGif.edit() - a Message obtained from an
+    //interaction reply/followUp can only be reliably edited through that interaction's webhook
+    //token; editing it directly hits the bot's normal REST client, which can 403 with
+    //"Missing Access" if the bot has no standing permissions in the channel beyond what the
+    //interaction itself grants (see the /roll fix for the same issue)
+    if (messageGif) interaction.webhook.editMessage(messageGif.id, { embeds: [main.textEmbed(finalText(faces))] }).catch(console.error);
     else main.respond(interaction, finalText(faces));
 
     main.respond(interaction, `${desc} results: ${response.length > 0 ? response : 'All dice have cancelled out'}`);
@@ -333,8 +339,11 @@ const buildMainScreen = (state, iconsOk = true) => {
             ),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`roll:symbols:${s}`).setLabel('Symbols').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`roll:descAsk:${s}`).setLabel('Description').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`roll:roll:${s}`).setLabel('Roll').setStyle(ButtonStyle.Success)
+                new ButtonBuilder().setCustomId(`roll:descAsk:${s}`).setLabel('Description').setStyle(ButtonStyle.Secondary)
+            ),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`roll:roll:${s}`).setLabel('Roll').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`roll:clear:${s}`).setLabel('Clear').setStyle(ButtonStyle.Danger)
             )
         ]
     };
@@ -476,6 +485,10 @@ const onComponent = async ({ interaction, client }) => {
         case 'main':
             await safeEditReply(interaction, (iconsOk) => buildMainScreen(state, iconsOk));
             break;
+        case 'clear':
+            state.counts = {};
+            await safeEditReply(interaction, (iconsOk) => buildMainScreen(state, iconsOk));
+            break;
         case 'roll': {
             const diceOrder = buildDiceOrder(state.counts);
             if (!diceOrder.length) {
@@ -497,12 +510,23 @@ const onComponent = async ({ interaction, client }) => {
             writeData(client, messageRef, 'diceResult', result.diceResult.roll);
             const rollLine = `${displayName(interaction)} rolls${state.desc ? `: ${state.desc}` : ''}`;
 
+            //the pool builder itself is an ephemeral message (see handlers.js), so it can only ever
+            //be edited back to another ephemeral message - the actual result has to go out as a
+            //fresh, public followUp() instead. Clear its buttons immediately so a click during the
+            //reveal below can't trigger a second roll, then delete it once the public post is up.
+            await interaction.editReply({ content: '', embeds: [textEmbed('Rolled!')], components: [] });
+
             //show the animated gif faces first, then swap to the static faces once they've had a
-            //moment to play - matches the old text-based /roll's two-stage editReply
-            await interaction.editReply({ content: '', embeds: [buildRollResultEmbed(rollLine, result.textGif || result.faces)], components: [] });
+            //moment to play - matches the old text-based /roll's two-stage editReply.
+            //the second edit goes through interaction.webhook (not publicMessage.edit()) because a
+            //followUp is only guaranteed postable/editable via the interaction's own webhook token -
+            //the bot's normal REST client can 403 with "Missing Access" editing it directly if the
+            //bot has no standing permissions in the channel beyond what the interaction itself grants
+            const publicMessage = await interaction.followUp({ embeds: [buildRollResultEmbed(rollLine, result.textGif || result.faces)] });
             await sleep(1200);
             const resultsLine = result.response.length > 0 ? result.response : 'All dice have cancelled out';
-            await interaction.editReply({ content: '', embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)], components: [] });
+            await interaction.webhook.editMessage(publicMessage.id, { embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)] });
+            await interaction.deleteReply().catch(console.error);
             break;
         }
         default:

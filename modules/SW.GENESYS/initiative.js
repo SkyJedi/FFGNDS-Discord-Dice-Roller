@@ -12,6 +12,10 @@ const { DIE_TYPES, SYMBOL_TYPES, ALL_TYPES, LABELS, MAX_COUNT, poolIcon, safeEdi
 
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
+//the channel-specific server nickname reads better than the bare Discord username -
+//interaction.member is absent in DMs, so fall back to the username there
+const displayName = (interaction) => interaction.member?.displayName || interaction.user.username;
+
 //initializeInitOrder
 const initializeInitOrder = () => {
     return {
@@ -74,6 +78,11 @@ const buildStatusText = (initiativeOrder) => {
     if (faces.length > 1500) faces = 'Initiative order too long to display.';
     return `Round: ${ordered.round} Turn: ${ordered.turn}\nInitiative Order: \n${faces}`;
 };
+
+//the menu (with its Next/Previous/etc. buttons) is ephemeral - only the person who ran /initiative
+//can see or click it (see handlers.js) - so every action that actually changes the order also
+//posts this plain, button-free status as a public followUp() for the rest of the table to see
+const publicStatusEmbed = (initiativeOrder, note) => textEmbed(note ? `${note}\n\n${buildStatusText(initiativeOrder)}` : buildStatusText(initiativeOrder));
 
 //parses a manually-typed order string (e.g. "nppnn") into slots
 const parseOrderString = (order) => {
@@ -248,7 +257,9 @@ const rollInitiativePool = async ({ interaction, client, state }) => {
     }
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder, true);
-    await interaction.editReply(buildMenu(initiativeOrder, note));
+    //keep the private control panel ready for the next click, and announce the roll publicly
+    await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
 };
 
 //---------------------------------------------------------------- set / modify
@@ -275,6 +286,7 @@ const submitSetModal = async ({ interaction, client }) => {
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
     await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, `${displayName(interaction)} sets the initiative order`)] });
 };
 
 const submitModifyModal = async ({ interaction, client }) => {
@@ -286,6 +298,7 @@ const submitModifyModal = async ({ interaction, client }) => {
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
     await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, `${displayName(interaction)} modifies the initiative order`)] });
 };
 
 //---------------------------------------------------------------- router
@@ -367,6 +380,7 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     let note;
+    let changed = true;
     switch (action) {
         case 'next':
             if (initiativeOrder.turn + 1 > initiativeOrder.slots.length) {
@@ -382,6 +396,7 @@ const onComponent = async ({ interaction, client }) => {
         case 'previous':
             if (initiativeOrder.turn === 1 && initiativeOrder.round === 1) {
                 note = 'Initiative is already at the starting turn!';
+                changed = false;
             } else if (initiativeOrder.turn - 1 < 1) {
                 initiativeOrder.turn = initiativeOrder.slots.length;
                 initiativeOrder.round--;
@@ -396,8 +411,16 @@ const onComponent = async ({ interaction, client }) => {
             return;
     }
 
+    //a no-op (already at the starting turn) stays private - nothing actually happened
+    if (!changed) {
+        await interaction.editReply(buildMenu(initiativeOrder, note));
+        return;
+    }
+
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    await interaction.editReply(buildMenu(initiativeOrder, note));
+    //keep the private control panel ready for the next click, and announce the change publicly
+    await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
 };
 
 exports.initiative = initiative;

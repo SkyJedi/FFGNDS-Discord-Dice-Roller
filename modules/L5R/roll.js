@@ -194,7 +194,12 @@ async function printResults(diceResult, interaction, desc, channelEmoji, message
 		main.respond(interaction, "No dice rolled.");
 		return;
 	}
-	if (messageGif) messageGif.edit({ embeds: [main.textEmbed(faces)] }).catch(console.error);
+	//edit via the interaction's webhook, not messageGif.edit() - a Message obtained from an
+	//interaction reply/followUp can only be reliably edited through that interaction's webhook
+	//token; editing it directly hits the bot's normal REST client, which can 403 with
+	//"Missing Access" if the bot has no standing permissions in the channel beyond what the
+	//interaction itself grants (see the roll.js /roll fix for the same issue)
+	if (messageGif) interaction.webhook.editMessage(messageGif.id, { embeds: [main.textEmbed(faces)] }).catch(console.error);
 	else main.respond(interaction, faces);
 
 	main.respond(interaction, desc + " results:" + "\n\n\t" + response);
@@ -386,8 +391,11 @@ const buildMainScreen = (state) => {
 			new ActionRowBuilder().addComponents(DIE_TYPES.map(type => poolButton(type, s))),
 			new ActionRowBuilder().addComponents(
 				new ButtonBuilder().setCustomId(`l5rroll:symbols:${s}`).setLabel('Symbols').setStyle(ButtonStyle.Secondary),
-				new ButtonBuilder().setCustomId(`l5rroll:roll:${s}`).setLabel('Roll').setStyle(ButtonStyle.Success),
 				new ButtonBuilder().setCustomId(`l5rroll:add:${s}`).setLabel('Add to Previous').setStyle(ButtonStyle.Primary)
+			),
+			new ActionRowBuilder().addComponents(
+				new ButtonBuilder().setCustomId(`l5rroll:roll:${s}`).setLabel('Roll').setStyle(ButtonStyle.Success),
+				new ButtonBuilder().setCustomId(`l5rroll:clear:${s}`).setLabel('Clear').setStyle(ButtonStyle.Danger)
 			)
 		]
 	};
@@ -421,6 +429,31 @@ const rollMenu = async ({ interaction }) => {
 	await interaction.editReply(buildMainScreen(emptyState()));
 };
 
+//Slash command entry point for /oldroll (L5R channels) - the pre-button-UI free-text dice code
+//(e.g. "wwbb"), kept for players who'd rather type a code than click through the button pool
+//builder that /roll opens today. /add still has its own free-text flow via roll() above.
+const oldRoll = async ({ interaction, client, channelEmoji }) => {
+	const params = getParams(interaction);
+	const desc = interaction.options.getString('text');
+	const messageRef = asMessageRef(interaction);
+
+	const result = await rollCore({ params, channelEmoji });
+	if (result.error) {
+		await interaction.editReply({ embeds: [textEmbed(result.error)] });
+		return;
+	}
+
+	writeData(client, messageRef, 'diceResult', result.diceResult.roll);
+	const rollLine = `${displayName(interaction)} rolls${desc ? `: ${desc}` : ''}`;
+
+	//show the animated gif faces first, then swap to the static faces once they've had a
+	//moment to play - matches /roll's button-driven two-stage reveal
+	await interaction.editReply({ embeds: [buildRollResultEmbed(rollLine, result.textGif || result.faces)] });
+	await sleep(1200);
+	const resultsLine = result.response && result.response.trim().length > 0 ? result.response : 'No symbols rolled';
+	await interaction.editReply({ embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)] });
+};
+
 //---------------------------------------------------------------- roll builder router
 
 const onComponent = async ({ interaction, client }) => {
@@ -443,6 +476,10 @@ const onComponent = async ({ interaction, client }) => {
 			await interaction.editReply(buildSymbolsScreen(state));
 			break;
 		case 'main':
+			await interaction.editReply(buildMainScreen(state));
+			break;
+		case 'clear':
+			state.counts = {};
 			await interaction.editReply(buildMainScreen(state));
 			break;
 		case 'roll':
@@ -471,12 +508,23 @@ const onComponent = async ({ interaction, client }) => {
 			writeData(client, messageRef, 'diceResult', result.diceResult.roll);
 			const rollLine = `${displayName(interaction)} ${action === 'add' ? 'adds' : 'rolls'}`;
 
+			//the pool builder itself is an ephemeral message (see handlers.js), so it can only ever
+			//be edited back to another ephemeral message - the actual result has to go out as a
+			//fresh, public followUp() instead. Clear its buttons immediately so a click during the
+			//reveal below can't trigger a second roll, then delete it once the public post is up.
+			await interaction.editReply({ content: '', embeds: [textEmbed('Rolled!')], components: [] });
+
 			//show the animated gif faces first, then swap to the static faces once they've had a
-			//moment to play - matches /roll's SWRPG/Genesys two-stage editReply
-			await interaction.editReply({ content: '', embeds: [buildRollResultEmbed(rollLine, result.textGif || result.faces)], components: [] });
+			//moment to play - matches /roll's SWRPG/Genesys two-stage editReply.
+			//the second edit goes through interaction.webhook (not publicMessage.edit()) because a
+			//followUp is only guaranteed postable/editable via the interaction's own webhook token -
+			//the bot's normal REST client can 403 with "Missing Access" editing it directly if the
+			//bot has no standing permissions in the channel beyond what the interaction itself grants
+			const publicMessage = await interaction.followUp({ embeds: [buildRollResultEmbed(rollLine, result.textGif || result.faces)] });
 			await sleep(1200);
 			const resultsLine = result.response && result.response.trim().length > 0 ? result.response : 'No symbols rolled';
-			await interaction.editReply({ content: '', embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)], components: [] });
+			await interaction.webhook.editMessage(publicMessage.id, { embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)] });
+			await interaction.deleteReply().catch(console.error);
 			break;
 		}
 		default:
@@ -488,6 +536,7 @@ exports.roll = roll;
 exports.rollCore = rollCore;
 exports.keep = keep;
 exports.rollMenu = rollMenu;
+exports.oldRoll = oldRoll;
 exports.onComponent = onComponent;
 
 //shared with modules/L5R/reroll.js so it gets the same pool builder and result display without

@@ -90,11 +90,10 @@ const submitSetModal = async ({ interaction, client }) => {
     destinyBalance.dark = toInt(interaction.fields.getTextInputValue('dark'));
     writeBalance(client, messageRef, destinyBalance);
 
-    await interaction.editReply({
-        content: '',
-        embeds: [textEmbed(`${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)],
-        components: []
-    });
+    //the menu is ephemeral (see handlers.js) - close it privately and announce the new pool publicly
+    await interaction.editReply({ content: '', embeds: [textEmbed('Done!')], components: [] });
+    await interaction.followUp({ embeds: [textEmbed(`${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
+    await interaction.deleteReply().catch(console.error);
 };
 
 //---------------------------------------------------------------- router
@@ -127,11 +126,13 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     let message;
+    let changed = true;
     switch (action) {
         case 'roll': {
             const rolled = functions.rollCore({ params: ['w'], channelEmoji });
             if (rolled.error) {
                 message = 'No dice rolled.';
+                changed = false;
                 break;
             }
             destinyBalance.light = +destinyBalance.light + +rolled.diceResult.results.lightpip;
@@ -143,6 +144,7 @@ const onComponent = async ({ interaction, client }) => {
         case 'light':
             if (destinyBalance.light <= 0) {
                 message = `No ${names.light} points available, request will be ignored`;
+                changed = false;
             } else {
                 destinyBalance.light--;
                 destinyBalance.dark++;
@@ -152,6 +154,7 @@ const onComponent = async ({ interaction, client }) => {
         case 'dark':
             if (destinyBalance.dark <= 0) {
                 message = `No ${names.dark} points available, request will be ignored`;
+                changed = false;
             } else {
                 destinyBalance.dark--;
                 destinyBalance.light++;
@@ -166,12 +169,18 @@ const onComponent = async ({ interaction, client }) => {
             return;
     }
 
+    //an error/no-op (no dice rolled, no points available) stays private - nothing actually
+    //happened, so there's nothing worth telling the rest of the table
+    if (!changed) {
+        await interaction.editReply({ content: '', embeds: [textEmbed(message)], components: [] });
+        return;
+    }
+
     writeBalance(client, messageRef, destinyBalance);
-    await interaction.editReply({
-        content: '',
-        embeds: [textEmbed(`${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)],
-        components: []
-    });
+    //the menu is ephemeral - close it privately and announce the change publicly
+    await interaction.editReply({ content: '', embeds: [textEmbed('Done!')], components: [] });
+    await interaction.followUp({ embeds: [textEmbed(`${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
+    await interaction.deleteReply().catch(console.error);
 };
 
 exports.destiny = destiny;

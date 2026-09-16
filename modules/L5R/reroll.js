@@ -264,8 +264,12 @@ const onComponent = async ({ interaction, client }) => {
 			return;
 		}
 		writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
-		//adding dice finalizes the menu, same as pressing Done
-		await interaction.editReply({ content: '', embeds: [await statusEmbed(rolled.diceResult, channelEmoji, buildAddPoolSummary(counts, 'Added'))], components: [] });
+		//the menu itself is ephemeral (see handlers.js), so it can only ever be edited back to
+		//another private message - the actual change has to go out as a fresh public followUp()
+		//instead, with the private message just closing out to confirm
+		await interaction.editReply({ content: '', embeds: [textEmbed('Added!')], components: [] });
+		await interaction.followUp({ embeds: [await statusEmbed(rolled.diceResult, channelEmoji, buildAddPoolSummary(counts, 'Added'))] });
+		await interaction.deleteReply().catch(console.error);
 		return;
 	}
 
@@ -295,8 +299,10 @@ const onComponent = async ({ interaction, client }) => {
 				return;
 			}
 			writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
-			//rerolling finalizes the menu, same as pressing Done
-			await interaction.editReply({ content: '', embeds: [await statusEmbed(rolled.diceResult, channelEmoji, 'Rerolled the same pool')], components: [] });
+			//the menu is ephemeral - close it privately and announce the reroll publicly
+			await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
+			await interaction.followUp({ embeds: [await statusEmbed(rolled.diceResult, channelEmoji, 'Rerolled the same pool')] });
+			await interaction.deleteReply().catch(console.error);
 			return;
 		}
 
@@ -325,8 +331,10 @@ const onComponent = async ({ interaction, client }) => {
 		const removedFace = diceResult.roll[type][randomIndex];
 		diceResult.roll[type].splice(randomIndex, 1);
 		writeData(client, messageRef, 'diceResult', diceResult.roll);
-		//removing a die finalizes the menu, same as pressing Done
-		await interaction.editReply({ content: '', embeds: [await statusEmbed(diceResult, channelEmoji, `Removed 1 ${dieFaceLabel(type, removedFace, channelEmoji)}`)], components: [] });
+		//the menu is ephemeral - close it privately and announce the removal publicly
+		await interaction.editReply({ content: '', embeds: [textEmbed('Removed!')], components: [] });
+		await interaction.followUp({ embeds: [await statusEmbed(diceResult, channelEmoji, `Removed 1 ${dieFaceLabel(type, removedFace, channelEmoji)}`)] });
+		await interaction.deleteReply().catch(console.error);
 		return;
 	}
 
@@ -340,8 +348,10 @@ const onComponent = async ({ interaction, client }) => {
 		const newFace = rollOneDie(type);
 		diceResult.roll[type][index] = newFace;
 		writeData(client, messageRef, 'diceResult', diceResult.roll);
-		//picking a die to reroll finalizes the menu, same as pressing Done
-		await interaction.editReply({ content: '', embeds: [await statusEmbed(diceResult, channelEmoji, `Rerolled ${dieFaceLabel(type, newFace, channelEmoji)} #${index + 1}`)], components: [] });
+		//the menu is ephemeral - close it privately and announce the reroll publicly
+		await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
+		await interaction.followUp({ embeds: [await statusEmbed(diceResult, channelEmoji, `Rerolled ${dieFaceLabel(type, newFace, channelEmoji)} #${index + 1}`)] });
+		await interaction.deleteReply().catch(console.error);
 		return;
 	}
 };

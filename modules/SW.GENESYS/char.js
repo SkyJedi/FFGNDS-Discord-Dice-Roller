@@ -18,6 +18,15 @@ const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const toInt = (value) => parseInt(String(value ?? '').replace(/[^-\d]/g, ''), 10) || 0;
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
+//the channel-specific server nickname reads better than the bare Discord username -
+//interaction.member is absent in DMs, so fall back to the username there
+const displayName = (interaction) => interaction.member?.displayName || interaction.user.username;
+
+//the whole menu is ephemeral (see handlers.js), so only the person managing characters can see
+//it - every action that actually writes a change also posts this plain, button-free
+//announcement as a public followUp() so the rest of the table knows what happened
+const announce = (interaction, text) => interaction.followUp({ embeds: [textEmbed(text)] });
+
 const readCharacters = (client, messageRef) => readData(client, messageRef, 'characterStatus');
 const writeCharacters = (client, messageRef, characterStatus) => writeData(client, messageRef, 'characterStatus', characterStatus);
 
@@ -146,6 +155,7 @@ const submitAddModal = async ({ interaction, client }) => {
     writeCharacters(client, messageRef, characterStatus);
 
     await interaction.editReply({ content: '', embeds: [textEmbed(buildCharacterStatus(name, character))], components: [backAndDoneRow(name)] });
+    await announce(interaction, `${displayName(interaction)} adds a new character:\n\n${buildCharacterStatus(name, character)}`);
 };
 
 //---------------------------------------------------------------- shared: character picker
@@ -223,6 +233,7 @@ const submitCritModal = async ({ interaction, client, name, wDelta, sDelta }) =>
         return;
     }
     await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta));
+    await announce(interaction, `${displayName(interaction)} adds ${critName(number)} (${number}) to ${name}`);
 };
 
 //shows each of the character's current crits as its own Remove button, so the user picks one
@@ -300,6 +311,7 @@ const submitCreditsModal = async ({ interaction, client, name, wDelta, sDelta })
     writeCharacters(client, messageRef, characterStatus);
 
     await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta, `Credits ${amount >= 0 ? '+' : ''}${amount} → ${target.credits}`));
+    await announce(interaction, `${displayName(interaction)} changes ${name}'s credits by ${amount >= 0 ? '+' : ''}${amount} (now ${target.credits})`);
 };
 
 //---------------------------------------------------------------- modify: obligation/duty/morality/inventory
@@ -376,6 +388,7 @@ const submitTrackAddModal = async ({ interaction, client, type, name, wDelta, sD
     writeCharacters(client, messageRef, characterStatus);
 
     await interaction.editReply(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
+    await announce(interaction, `${displayName(interaction)} adds ${upperFirst(type)} "${label}: ${amount}" to ${name}`);
 };
 
 //removes the entry at `index` in the alphabetically-sorted list of the type's current entries
@@ -510,6 +523,7 @@ const onComponent = async ({ interaction, client }) => {
             delete characterStatus[name];
             writeCharacters(client, messageRef, characterStatus);
             await interaction.editReply({ content: '', embeds: [textEmbed(`${name} has been removed.`)], components: [backAndDoneRow()] });
+            await announce(interaction, `${displayName(interaction)} removes character ${name}`);
             break;
         }
 
@@ -544,6 +558,7 @@ const onComponent = async ({ interaction, client }) => {
                 break;
             }
             await interaction.editReply(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
+            await announce(interaction, `${displayName(interaction)} removes a ${type} entry from ${name}`);
             break;
         }
         case 'critRemoveAsk': {
@@ -565,6 +580,7 @@ const onComponent = async ({ interaction, client }) => {
             }
             const prefix = removed !== null ? `Removed ${critName(removed)} (${removed})` : undefined;
             await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta, prefix));
+            if (removed !== null) await announce(interaction, `${displayName(interaction)} removes ${critName(removed)} (${removed}) from ${name}`);
             break;
         }
         case 'critRoll': {
@@ -576,6 +592,7 @@ const onComponent = async ({ interaction, client }) => {
                 break;
             }
             await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta, `Rolled ${roll} → ${critName(roll)}`));
+            await announce(interaction, `${displayName(interaction)} rolls a critical injury for ${name}: ${roll} → ${critName(roll)}`);
             break;
         }
         case 'modApply': {
@@ -590,6 +607,13 @@ const onComponent = async ({ interaction, client }) => {
             characterStatus[name] = target;
             writeCharacters(client, messageRef, characterStatus);
             await interaction.editReply({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });
+            //0/0 is a harmless no-op (see buildModifyScreen's comment) - nothing changed at this
+            //step, so there's nothing new to announce (any earlier credits/crit/track changes in
+            //this session were already announced individually as they happened)
+            if (wDelta || sDelta) {
+                await announce(interaction, `${displayName(interaction)} updates ${name}\n\n${buildCharacterStatus(name, target)}`);
+                await interaction.deleteReply().catch(console.error);
+            }
             break;
         }
 

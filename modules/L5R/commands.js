@@ -6,6 +6,10 @@ async function commands({ client, interaction, command, channelEmoji }) {
 		case 'r':
 			await functions.rollMenu({ interaction, client, channelEmoji });
 			break;
+		// Old free-text dice code (e.g. "wwbb") - see modules/L5R/roll.js's oldRoll()
+		case 'oldroll':
+			await functions.oldRoll({ interaction, client, channelEmoji });
+			break;
 		case 'keep':
 		case 'k':
 			await functions.keep({ interaction, client, channelEmoji });

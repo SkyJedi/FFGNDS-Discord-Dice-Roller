@@ -1,5 +1,5 @@
 const Discord = require('discord.js');
-const { PermissionFlagsBits, Colors } = Discord;
+const { PermissionFlagsBits, Colors, MessageFlags } = Discord;
 const { version } = require('./package.json');
 const config = require('./config');
 const { readData, writeData } = require('./modules/data');
@@ -17,7 +17,7 @@ const l5rRerollComponent = require('./modules/L5R/').rerollComponent;
 
 const SYSTEM_AGNOSTIC_COMMANDS = ['stats', 'ver', 'poly', 'swrpg', 'genesys', 'l5r', 'invite', 'help', 'roll'];
 const SW_GENESYS_COMMANDS = ['character', 'crit', 'shipcrit', 'species', 'gleepglop', 'destiny', 'story', 'initiative', 'reroll', 'obligation', 'duty', 'oldroll'];
-const L5R_COMMANDS = ['keep', 'add', 'reroll'];
+const L5R_COMMANDS = ['keep', 'add', 'reroll', 'oldroll'];
 const ADMIN_COMMANDS = ['restart', 'build'];
 
 //Routes button clicks and modal submissions from the interactive /character, /destiny, and /roll menus.
@@ -43,7 +43,7 @@ const onInteraction = async ({ interaction, client }) => {
         if (permissions && !permissions.has(PermissionFlagsBits.UseExternalEmojis)) {
             await interaction.reply({
                 embeds: [new Discord.EmbedBuilder().setColor(Colors.DarkNavy).setDescription(`Please enable \'Use External Emoji\' permission for ${client.user.username}`)],
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -51,15 +51,23 @@ const onInteraction = async ({ interaction, client }) => {
         if (permissions && !permissions.has(PermissionFlagsBits.EmbedLinks)) {
             await interaction.reply({
                 content: `Please enable \'Embed Links\' permission for ${client.user.username}`,
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
     }
 
-    await interaction.deferReply();
-
     const command = interaction.commandName;
+
+    //every button-driven menu is ephemeral (visible only to whoever ran the command) - each one's
+    //onComponent router closes out with a public followUp() once something actually happens (a
+    //roll, a pool change, a character update, ...), so the table still sees the result even though
+    //the menu itself is private. A message's ephemeral flag is fixed at its first reply/deferReply
+    //and can never change on later edits, so this has to be decided here before that goes out.
+    // NOTE: this means these menus' buttons only work for the person who ran the command - nobody
+    // else in the channel can see or click them, even for shared trackers like /destiny or /initiative.
+    const EPHEMERAL_COMMANDS = ['roll', 'reroll', 'character', 'destiny', 'story', 'initiative'];
+    await interaction.deferReply(EPHEMERAL_COMMANDS.includes(command) ? { flags: MessageFlags.Ephemeral } : undefined);
     const messageRef = modules.asMessageRef(interaction);
 
     //get channelEmoji

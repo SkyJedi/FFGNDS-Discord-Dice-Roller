@@ -1,6 +1,6 @@
 {
   "name": "edge-of-the-empire-dice-roller",
-  "version": "2.9.0",
+  "version": "3.0.0",
   "description": "Discord dice roller for EotE, AoR, FnD, Genesys, and L5R role playing games.",
   "main": "index.js",
   "repository": {
