@@ -1,11 +1,14 @@
-const { dice, readData } = require('../');
-const main = require('../../index');
+const { dice, readData, asMessageRef } = require('../');
 
-const trigger = async ({ client, message, type }) => {
-    let characterStatus = await readData(client, message, 'characterStatus');
+const trigger = async ({ client, interaction, type }) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
+    const messageRef = asMessageRef(interaction);
+    let characterStatus = await readData(client, messageRef, 'characterStatus');
     let list = [];
     if (Object.keys(characterStatus).length === 0) {
-        main.sendMessage({ message, text: 'No characters found please use !char to setup' });
+        main.sendMessage({ interaction, text: 'No characters found please use /character to setup' });
         return;
     }
     Object.keys(characterStatus).forEach(characterName => {
@@ -24,17 +27,17 @@ const trigger = async ({ client, message, type }) => {
     let target = 0;
     let total = 0;
     list.forEach(name => total += name.value);
-    main.sendMessage({ message, text: `The total group ${type} is ${total}. The ${type} roll is ${roll}.` });
+    main.sendMessage({ interaction, text: `The total group ${type} is ${total}. The ${type} roll is ${roll}.` });
 
     if (roll > total) {
-        main.sendMessage({ message, text: `No ${type} triggered` });
+        main.sendMessage({ interaction, text: `No ${type} triggered` });
         return;
     }
 
     for (let i = 0; i < list.length; i++) {
         target += list[i].value;
         if (target > roll) {
-            main.sendMessage({ message, text: `${list[i].name}'s ${list[i][type]} ${type} has been triggered.` });
+            main.sendMessage({ interaction, text: `${list[i].name}'s ${list[i][type]} ${type} has been triggered.` });
             break;
         }
     }

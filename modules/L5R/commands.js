@@ -1,25 +1,24 @@
 const functions = require('./');
 
-async function commands({ client, message, params, command, desc, channelEmoji, prefix }) {
+async function commands({ client, interaction, command, channelEmoji }) {
 	switch (command) {
 		case 'roll':
 		case 'r':
-			await functions.roll(params, message, client, desc, channelEmoji);
+			await functions.rollMenu({ interaction, client, channelEmoji });
 			break;
 		case 'keep':
 		case 'k':
-			await functions.keep(params, message, client, desc, channelEmoji);
+			await functions.keep({ interaction, client, channelEmoji });
 			break;
 		case 'add':
-			await functions.roll(params, message, client, desc, channelEmoji, 'add');
+			await functions.roll({ interaction, client, channelEmoji, add: true });
 			break;
 		case 'reroll':
 		case 'rr':
-			await functions.keep(params, message, client, desc, channelEmoji, 'reroll');
+			await functions.rerollMenu({ interaction, client, channelEmoji });
 			break;
 		case 'help':
-		case 'h':
-			functions.help(params[0], message, prefix);
+			functions.help(interaction);
 			break;
 		default:
 			break;

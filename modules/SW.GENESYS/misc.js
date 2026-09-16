@@ -147,8 +147,11 @@ let gleeps = {
     ]
 };
 
-const gleepglop = ({ message, channelEmoji }) => {
-    message.reply(`A wild ${sample(gleeps[channelEmoji.includes('genesys') ? 'genesys' : 'swrpg'])} appears!`);
+const gleepglop = ({ interaction, channelEmoji }) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
+    main.respond(interaction, `A wild ${sample(gleeps[channelEmoji.includes('genesys') ? 'genesys' : 'swrpg'])} appears!`);
 }
 
 exports.gleepglop = gleepglop;

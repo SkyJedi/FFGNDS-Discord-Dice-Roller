@@ -1,0 +1,8 @@
+services:
+  dice-roller:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/usr/src/app/config.json:ro
+      - ./d1-firestore.json:/usr/src/app/d1-firestore.json:ro
+      - ./emoji.json:/usr/src/app/emoji.json

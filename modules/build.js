@@ -42,6 +42,7 @@ const dice = [
     'black',
     'blackf',
     'blackt',
+    'white',
     'whiten',
     'whitenn',
     'whitel',
@@ -65,12 +66,30 @@ const dice = [
     'blackgif',
     'whitegif'
 ];
+const buttons = [
+    'success',
+    'advantage',
+    'triumph',
+    'failure',
+    'threat',
+    'despair',
+    'lightpip',
+    'darkpip',
+    'YellowHex',
+    'WhiteHex',
+    'RedHex',
+    'PurpleDiamond',
+    'GreenDiamond',
+    'BlueSquare',
+    'BlackSquare',
+];
 
 const build = async (client) => {
     const swrpg = await getEmoji('swrpg', client, dice);
     const genesys = await getEmoji('genesys', client, dice);
     const swrpgPatreon = await getEmoji('swrpgPatreon', client, dice);
     const genesysPatreon = await getEmoji('genesysPatreon', client, dice);
+    const buttonEmoji = await getEmoji('buttonEmoji', client, buttons);
     const l5r = await getEmoji('l5r', client, l5rDice);
     const l5rPatreon = await getEmoji('l5rPatreon', client, l5rDice);
     fs.writeFile(`./emoji.json`, JSON.stringify({
@@ -78,6 +97,7 @@ const build = async (client) => {
         swrpgPatreon,
         genesys,
         genesysPatreon,
+        buttonEmoji,
         l5r,
         l5rPatreon
     }), () => console.log('The file has been saved!'));
@@ -93,7 +113,7 @@ const find = (c, { list, guildID }) => {
     let final = {};
     list.forEach(emojiName => {
         const emoji = guild.emojis.cache.find(e => e.name === emojiName);
-        final[emojiName] = emoji ? `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>` : emojiName;
+        if (emoji) final[emojiName] = `<${emoji.animated ? 'a' : ''}:${emoji.name}:${emoji.id}>`;
     });
     return final;
 };

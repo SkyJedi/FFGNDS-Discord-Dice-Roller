@@ -1,151 +1,443 @@
-const dice = require('../').dice;
-const printEmoji = require('../').emoji;
+const { dice, emoji, readData, writeData, asMessageRef } = require('../');
 const { diceFaces } = require('./');
-const {roll, processType, countSymbols, printResults, rollDice} = require('./roll')
-const { readData, writeData } = require('../data');
-const asyncForEach = require('../').asyncForEach;
-const symbols = require('./dice').symbols;
+const {
+    ActionRowBuilder, ButtonBuilder, ButtonStyle,
+    EmbedBuilder, Colors
+} = require('discord.js');
 
-const reroll = async ({ client, message, params, channelEmoji }) => {
-    let diceResult = await readData(client, message, 'diceResult', channelEmoji);
+//the pool builder (for Add) and the result display both reuse /roll's building blocks instead of
+//duplicating them - see modules/SW.GENESYS/roll.js
+const swRoll = require('./roll');
+const {
+    rollCore, rollDice, countSymbols, buildResultText, buildRollResultEmbed, buildDiceOrder,
+    DIE_TYPES, SYMBOL_TYPES, ALL_TYPES, LABELS, MAX_COUNT, poolIcon, safeEditReply
+} = swRoll;
 
-    if (!diceResult) return;
-    if (Object.keys(diceResult).length === 0) return;
-    diceResult = { roll: diceResult };
-    let target = '';
-    let position = 0;
-    let command = params[0];
+const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
-    switch(command) {
-        case 'add':
-            diceResult = await roll({ client, message, params: params.slice(1), channelEmoji, desc: 'add', diceResult });
-            break;
-        case 'same':
-            let rebuilt = [];
-            Object.keys(diceResult.roll).forEach(color => {
-                diceResult.roll[color].forEach(() => rebuilt.push(color));
+const readDiceResult = async (client, messageRef) => {
+    const roll = await readData(client, messageRef, 'diceResult');
+    if (!roll || Object.keys(roll).length === 0) return null;
+    return { roll, results: {} };
+};
+
+const noRollScreen = () => ({ content: '', embeds: [textEmbed('No previous roll to modify - use /roll first.')], components: [] });
+
+//---------------------------------------------------------------- menu
+
+const statusEmbed = (diceResult, channelEmoji, note) => {
+    countSymbols(diceResult);
+    const { faces, response } = buildResultText(diceResult, channelEmoji);
+    const resultsLine = faces ? (response.length > 0 ? response : 'All dice have cancelled out') : undefined;
+    return buildRollResultEmbed(note || 'Reroll', faces || 'No dice rolled.', resultsLine);
+};
+
+const backRow = (customId = 'reroll:menu') => new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(customId).setLabel('Back').setStyle(ButtonStyle.Secondary)
+);
+
+const buildMenu = (diceResult, channelEmoji, note) => ({
+    content: '',
+    embeds: [statusEmbed(diceResult, channelEmoji, note)],
+    components: [
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('reroll:add').setLabel('Add').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('reroll:same').setLabel('Same').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId('reroll:removeScreen').setLabel('Remove').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId('reroll:selectScreen').setLabel('Select').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('reroll:fortuneScreen').setLabel('Fortune').setStyle(ButtonStyle.Secondary)
+        ),
+        new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('reroll:done').setLabel('Done').setStyle(ButtonStyle.Primary)
+        )
+    ]
+});
+
+//Slash command entry point - handlers.js has already deferred the reply
+const reroll = async ({ interaction, client, channelEmoji }) => {
+    const messageRef = asMessageRef(interaction);
+    const diceResult = await readDiceResult(client, messageRef);
+    await interaction.editReply(diceResult ? buildMenu(diceResult, channelEmoji) : noRollScreen());
+};
+
+//---------------------------------------------------------------- add (button pool builder)
+
+const encodeAddState = (counts) => ALL_TYPES.map(type => counts[type] || 0).join(',');
+
+const decodeAddState = (str) => {
+    const counts = {};
+    (str || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
+    return counts;
+};
+
+const poolButton = (type, s, iconsOk) => {
+    const button = new ButtonBuilder().setCustomId(`reroll:addPoolAdd-${type}:${s}`).setStyle(ButtonStyle.Secondary);
+    const icon = poolIcon(type, iconsOk);
+    return icon ? button.setEmoji(icon) : button.setLabel(LABELS[type]);
+};
+
+const buildAddPoolSummary = (counts, iconsOk, prefix = 'Adding') => {
+    const parts = ALL_TYPES.filter(type => counts[type] > 0).map(type => {
+        const icon = poolIcon(type, iconsOk);
+        return icon ? `${counts[type]}${icon}` : `${counts[type]} ${LABELS[type]}`;
+    });
+    return parts.length ? `${prefix}: ${parts.join(' ')}` : `${prefix}: nothing selected`;
+};
+
+const buildAddPoolMainScreen = (counts, iconsOk = true) => {
+    const s = encodeAddState(counts);
+    return {
+        content: '',
+        embeds: [textEmbed(buildAddPoolSummary(counts, iconsOk))],
+        components: [
+            new ActionRowBuilder().addComponents(DIE_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(DIE_TYPES.slice(5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`reroll:addPoolSymbols:${s}`).setLabel('Symbols').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`reroll:addPoolRoll:${s}`).setLabel('Add').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`reroll:addPoolCancel:${s}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+            )
+        ]
+    };
+};
+
+const buildAddPoolSymbolsScreen = (counts, iconsOk = true) => {
+    const s = encodeAddState(counts);
+    return {
+        content: '',
+        embeds: [textEmbed(buildAddPoolSummary(counts, iconsOk))],
+        components: [
+            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`reroll:addPoolMain:${s}`).setLabel('Back').setStyle(ButtonStyle.Secondary)
+            )
+        ]
+    };
+};
+
+//---------------------------------------------------------------- remove
+
+//removal is random within a type rather than a specific die, so these use the button-shape
+//poolIcon (like Add's buttons) instead of any one face's emoji
+const removeButton = (type, count, iconsOk) => {
+    const button = new ButtonBuilder().setCustomId(`reroll:removeColor-${type}`).setStyle(ButtonStyle.Danger);
+    const icon = poolIcon(type, iconsOk);
+    if (icon) button.setEmoji(icon);
+    button.setLabel(icon ? `${count}` : `${LABELS[type]} (${count})`);
+    return button;
+};
+
+const buildRemoveScreen = (diceResult, channelEmoji, note, iconsOk = true) => {
+    const present = ALL_TYPES.filter(type => (diceResult.roll[type] || []).length > 0);
+    if (present.length === 0) {
+        return {
+            content: '',
+            embeds: [statusEmbed(diceResult, channelEmoji, note || 'No dice left to remove')],
+            components: [backRow()]
+        };
+    }
+    const rows = [];
+    for (let i = 0; i < present.length; i += 5) {
+        rows.push(new ActionRowBuilder().addComponents(
+            present.slice(i, i + 5).map(type => removeButton(type, diceResult.roll[type].length, iconsOk))
+        ));
+    }
+    rows.push(backRow());
+    return {
+        content: '',
+        embeds: [statusEmbed(diceResult, channelEmoji, note || 'Pick a die color to remove one at random')],
+        components: rows.slice(0, 5)
+    };
+};
+
+//---------------------------------------------------------------- select (reroll a specific die)
+
+//lists every individual die across the given types as its own button, e.g. "Yellow #2" -
+//capped at 20 like char.js's picker lists, to stay within Discord's 5 rows of 5 buttons
+const buildDieEntries = (diceResult, types) => {
+    const entries = [];
+    types.forEach(type => (diceResult.roll[type] || []).forEach((_, index) => entries.push({ type, index })));
+    return entries;
+};
+
+//the per-channel result emoji (e.g. "yellowss") is a different set from poolIcon's button
+//shapes, so it needs its own custom-emoji validation - same idea as roll.js's resolvedEmoji()
+const CUSTOM_EMOJI_PATTERN = /^<a?:\w+:\d+>$/;
+const dieFaceIcon = (type, face, channelEmoji, iconsOk) => {
+    if (!iconsOk) return null;
+    const key = SYMBOL_TYPES.includes(type) ? type : `${type}${diceFaces[type][face].face}`;
+    const icon = emoji(key, channelEmoji);
+    return CUSTOM_EMOJI_PATTERN.test(icon || '') ? icon : null;
+};
+
+//for result-message text (not buttons), so no iconsOk/retry needed - an unresolved emoji just
+//falls back to the plain type label instead of risking Discord rejecting an invalid button emoji
+const dieFaceLabel = (type, face, channelEmoji) => dieFaceIcon(type, face, channelEmoji, true) || LABELS[type];
+
+const selectDieButton = (diceResult, channelEmoji, type, index, iconsOk) => {
+    const button = new ButtonBuilder().setCustomId(`reroll:selectDie-${type}-${index}`).setStyle(ButtonStyle.Primary);
+    const icon = dieFaceIcon(type, diceResult.roll[type][index], channelEmoji, iconsOk);
+    return icon ? button.setEmoji(icon) : button.setLabel(`${LABELS[type]} #${index + 1}`);
+};
+
+const buildSelectScreen = (diceResult, channelEmoji, note, iconsOk = true) => {
+    const entries = buildDieEntries(diceResult, ALL_TYPES).slice(0, 20);
+    if (entries.length === 0) {
+        return { content: '', embeds: [statusEmbed(diceResult, channelEmoji, note || 'No dice to reroll')], components: [backRow()] };
+    }
+    const rows = [];
+    for (let i = 0; i < entries.length; i += 5) {
+        rows.push(new ActionRowBuilder().addComponents(
+            entries.slice(i, i + 5).map(({ type, index }) => selectDieButton(diceResult, channelEmoji, type, index, iconsOk))
+        ));
+    }
+    rows.push(backRow());
+    return {
+        content: '',
+        embeds: [statusEmbed(diceResult, channelEmoji, note || 'Pick a die to reroll')],
+        components: rows.slice(0, 5)
+    };
+};
+
+//---------------------------------------------------------------- fortune (flip to an adjacent face)
+
+//only real dice have meaningful adjacent faces - symbol "dice" are a single fixed face (see
+//modules/SW.GENESYS/dice.js), so they're left out of this list entirely
+const fortuneDieButton = (diceResult, channelEmoji, type, index, iconsOk) => {
+    const button = new ButtonBuilder().setCustomId(`reroll:fortuneDie-${type}-${index}`).setStyle(ButtonStyle.Secondary);
+    const icon = dieFaceIcon(type, diceResult.roll[type][index], channelEmoji, iconsOk);
+    return icon ? button.setEmoji(icon) : button.setLabel(`${LABELS[type]} #${index + 1}`);
+};
+
+const buildFortuneScreen = (diceResult, channelEmoji, note, iconsOk = true) => {
+    const entries = buildDieEntries(diceResult, DIE_TYPES).slice(0, 20);
+    if (entries.length === 0) {
+        return { content: '', embeds: [statusEmbed(diceResult, channelEmoji, note || 'No dice to flip')], components: [backRow()] };
+    }
+    const rows = [];
+    for (let i = 0; i < entries.length; i += 5) {
+        rows.push(new ActionRowBuilder().addComponents(
+            entries.slice(i, i + 5).map(({ type, index }) => fortuneDieButton(diceResult, channelEmoji, type, index, iconsOk))
+        ));
+    }
+    rows.push(backRow());
+    return {
+        content: '',
+        embeds: [statusEmbed(diceResult, channelEmoji, note || 'Pick a die to flip to an adjacent side')],
+        components: rows.slice(0, 5)
+    };
+};
+
+//shows the die's current face plus every adjacent face it could flip to (a Force/Destiny point
+//"fortune" flip) - numbered buttons below apply the swap, each carrying the resulting face's emoji
+const buildFortuneOptionsScreen = (diceResult, channelEmoji, type, index, iconsOk = true) => {
+    const currentFace = diceResult.roll[type][index];
+    const options = diceFaces[type][currentFace].adjacentposition;
+
+    let text = `${LABELS[type]} #${index + 1} - current: ${emoji(`${type}${diceFaces[type][currentFace].face}`, channelEmoji)}\n\nOptions:\n`;
+    options.forEach((optionFace, i) => {
+        text += `${i + 1}: ${emoji(`${type}${diceFaces[type][optionFace].face}`, channelEmoji)}  `;
+    });
+
+    const buttons = options.map((optionFace, i) => {
+        const button = new ButtonBuilder().setCustomId(`reroll:fortuneSwap-${type}-${index}-${i}`).setStyle(ButtonStyle.Secondary);
+        const icon = dieFaceIcon(type, optionFace, channelEmoji, iconsOk);
+        if (icon) button.setEmoji(icon);
+        button.setLabel(`${i + 1}`);
+        return button;
+    });
+
+    return {
+        content: '',
+        embeds: [textEmbed(text)],
+        components: [
+            new ActionRowBuilder().addComponents(buttons),
+            backRow('reroll:fortuneScreen')
+        ]
+    };
+};
+
+//---------------------------------------------------------------- router
+
+const onComponent = async ({ interaction, client }) => {
+    const parts = interaction.customId.split(':');
+    const action = parts[1];
+    const messageRef = asMessageRef(interaction);
+
+    //---- add (pool builder) ----
+    if (action === 'add') {
+        await interaction.deferUpdate();
+        await safeEditReply(interaction, (iconsOk) => buildAddPoolMainScreen({}, iconsOk));
+        return;
+    }
+    if (action.startsWith('addPoolAdd-')) {
+        const counts = decodeAddState(parts[2]);
+        const type = action.slice('addPoolAdd-'.length);
+        counts[type] = Math.min((counts[type] || 0) + 1, MAX_COUNT);
+        await interaction.deferUpdate();
+        await safeEditReply(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildAddPoolSymbolsScreen(counts, iconsOk) : buildAddPoolMainScreen(counts, iconsOk));
+        return;
+    }
+    if (action === 'addPoolSymbols') {
+        const counts = decodeAddState(parts[2]);
+        await interaction.deferUpdate();
+        await safeEditReply(interaction, (iconsOk) => buildAddPoolSymbolsScreen(counts, iconsOk));
+        return;
+    }
+    if (action === 'addPoolMain') {
+        const counts = decodeAddState(parts[2]);
+        await interaction.deferUpdate();
+        await safeEditReply(interaction, (iconsOk) => buildAddPoolMainScreen(counts, iconsOk));
+        return;
+    }
+    if (action === 'addPoolCancel') {
+        await interaction.deferUpdate();
+        const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
+        const diceResult = await readDiceResult(client, messageRef);
+        await interaction.editReply(diceResult ? buildMenu(diceResult, channelEmoji) : noRollScreen());
+        return;
+    }
+    if (action === 'addPoolRoll') {
+        const counts = decodeAddState(parts[2]);
+        await interaction.deferUpdate();
+        const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
+        const diceOrder = buildDiceOrder(counts);
+        if (!diceOrder.length) {
+            await safeEditReply(interaction, (iconsOk) => {
+                const screen = buildAddPoolMainScreen(counts, iconsOk);
+                screen.embeds = [textEmbed(`Pick some dice to add first.\n\n${buildAddPoolSummary(counts, iconsOk)}`)];
+                return screen;
             });
-            diceResult = await roll({ client, message, params, channelEmoji, diceOrder: rebuilt });
-            break;
-        case 'remove':
-            target = processType(message, params.slice(1));
-            if (target === 0) {
-                message.reply('Bad syntax, please look at !help reroll');
-                break;
-            }
-            let count = 0;
-            target.forEach(color => {
-                if (!diceResult.roll[color] || diceResult.roll[color] === []) {
-                    message.reply(`There are no more ${color} die to remove!`);
-                } else {
-                    let random = dice(diceResult.roll[color].length) - 1;
-                    diceResult.roll[color].splice(random, 1);
-                    count++;
-                }
-            });
-            diceResult = countSymbols(diceResult, message, client, channelEmoji);
-            printResults(diceResult, message, `Removing ${count} Dice`, channelEmoji);
-            break;
-        case 'select':
-            if (!params[1]) {
-                message.reply('Bad syntax, please look at !help reroll');
-                break;
-            }
-            if (params[1].replace(/\D/g, '') === '') {
-                message.reply('Bad syntax, please look at !help reroll');
-                break;
-            }
-            let fortuneDice = params.slice(1);
-            let text = 'Rerolling ';
-            let trigger = 0;
-            fortuneDice.forEach((die, index) => {
-                let arr = processType(message, [`${die}`]);
-                target = arr[0];
-                position = die.replace(/\D/g, '') - 1;
+            return;
+        }
 
-                if (diceResult.roll[target] && diceResult.roll[target] !== 0 && diceResult.roll[target][position]) {
-                    diceResult.roll[target].splice(position, 1, rollDice(target));
-                    text += `${target}${position + 1} `;
-                    trigger = 1;
-                } else message.reply(`There are no ${target} dice at position ${position + 1} to reroll`);
-                if (index + 1 >= fortuneDice.length) {
-                    if (trigger === 1) {
-                        diceResult = countSymbols(diceResult, message, client, channelEmoji);
-                        printResults(diceResult, message, text, channelEmoji);
-                    }
-                }
+        const previousRoll = await readData(client, messageRef, 'diceResult');
+        const rolled = rollCore({ diceOrder, channelEmoji, diceResult: { roll: { ...previousRoll } } });
+        if (rolled.error) {
+            await interaction.editReply({ content: '', embeds: [textEmbed(rolled.error)], components: [] });
+            return;
+        }
+        writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
+        //adding dice finalizes the menu, same as pressing Done - the note names what was added
+        //using the same button-shape icons shown on the pool screen (not the rolled face emoji)
+        await safeEditReply(interaction, (iconsOk) => ({
+            content: '',
+            embeds: [statusEmbed(rolled.diceResult, channelEmoji, buildAddPoolSummary(counts, iconsOk, 'Added'))],
+            components: []
+        }));
+        return;
+    }
 
-            });
-            break;
-        case 'fortune':
-            if (!params[1] || !params[2]) {
-                message.reply('Bad syntax, please look at !help reroll');
-                break;
+    await interaction.deferUpdate();
+    const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
+    const diceResult = await readDiceResult(client, messageRef);
+    if (!diceResult) {
+        await interaction.editReply(noRollScreen());
+        return;
+    }
+
+    switch (action) {
+        case 'menu':
+            await interaction.editReply(buildMenu(diceResult, channelEmoji));
+            return;
+
+        case 'done':
+            await interaction.editReply({ content: '', embeds: [statusEmbed(diceResult, channelEmoji)], components: [] });
+            return;
+
+        case 'same': {
+            const rebuilt = [];
+            Object.keys(diceResult.roll).forEach(type => diceResult.roll[type].forEach(() => rebuilt.push(type)));
+            const rolled = rollCore({ diceOrder: rebuilt, channelEmoji });
+            if (rolled.error) {
+                await interaction.editReply(buildMenu(diceResult, channelEmoji, rolled.error));
+                return;
             }
-            if (params[2].replace(/\D/g, '') === '') {
-                message.reply('Bad syntax, please look at !help reroll');
-                break;
-            }
-            let fortuneCommand = params[1];
-            switch(fortuneCommand) {
-                case 'show':
-                case 'options':
-                    let fortuneDice = params.slice(2);
-                    await asyncForEach(fortuneDice, async die => {
-                        let arr = processType(message, [`${die}`]);
-                        target = arr[0];
-                        position = die.replace(/\D/g, '') - 1;
-                        let emoji;
-                        if (diceResult.roll[target] && diceResult.roll[target] !== 0 &&
-                            diceResult.roll[target][position]) {
-                            let currentRoll = diceResult.roll[target][position];
-                            emoji = `${target}${diceFaces[target][currentRoll].face}`;
-                            if (symbols.includes(target)) emoji = target;
-                            let text = `${target}${position + 1} ` + await printEmoji(emoji, channelEmoji) + ':\n';
-                            let count = 1;
-                            await asyncForEach(diceFaces[target][currentRoll].adjacentposition, async newRoll => {
-                                emoji = `${target}${diceFaces[target][newRoll].face}`;
-                                if (symbols.includes(target)) emoji = target;
-                                text += count + ': ' + await printEmoji(emoji, channelEmoji) + '  ';
-                                count++;
-                            });
-                            message.reply(text);
-                        } else {
-                            message.reply(`There is not a ${target} die at position ${position + 1}`);
-                        }
-                    });
-                    break;
-                case 'swap':
-                    let text = '';
-                    let arr = processType(message, [params[2]]);
-                    target = arr[0];
-                    let trigger = 0;
-                    position = params[2].replace(/\D/g, '') - 1;
-                    if (diceFaces[target][diceResult.roll[target][position]].adjacentposition[params[3] - 1] ===
-                        undefined) message.reply(`There is no option ${params[3]} for ${target}${position + 1}`);
-                    else if (diceResult.roll[target] && diceResult.roll[target] !== 0 &&
-                        diceResult.roll[target][position]) {
-                        diceResult.roll[target].splice(position, 1, diceFaces[target][diceResult.roll[target][position]].adjacentposition[params[3] -
-                        1]);
-                        text += ` ${target}${position + 1} with option ${params[3]},`;
-                        trigger = 1;
-                    } else message.reply(`There are no ${target} dice at position ${position + 1} to reroll`);
-                    if (trigger === 1) {
-                        text.slice(0, -1);
-                        message.reply(`Replacing${text}:`);
-                        diceResult = countSymbols(diceResult, message, client, channelEmoji);
-                        printResults(diceResult, message, ``, channelEmoji);
-                    }
-                    break;
-                default:
-                    break;
-            }
-            break;
+            writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
+            //rerolling finalizes the menu, same as pressing Done
+            await interaction.editReply({ content: '', embeds: [statusEmbed(rolled.diceResult, channelEmoji, 'Rerolled the same pool')], components: [] });
+            return;
+        }
+
+        case 'removeScreen':
+            await safeEditReply(interaction, (iconsOk) => buildRemoveScreen(diceResult, channelEmoji, undefined, iconsOk));
+            return;
+
+        case 'selectScreen':
+            await safeEditReply(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, undefined, iconsOk));
+            return;
+
+        case 'fortuneScreen':
+            await safeEditReply(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, undefined, iconsOk));
+            return;
+
         default:
             break;
     }
-    if (!diceResult) diceResult.roll = false;
-    writeData(client, message, 'diceResult', diceResult.roll);
+
+    //remove/select/fortune actions carry the die type (and, for select/fortune, its index) in the
+    //action string itself (e.g. "selectDie-yellow-2"), so they're matched by prefix instead of by
+    //enumerating every possible die/symbol type as its own exact case
+    if (action.startsWith('removeColor-')) {
+        const type = action.slice('removeColor-'.length);
+        if (!diceResult.roll[type] || diceResult.roll[type].length === 0) {
+            await safeEditReply(interaction, (iconsOk) => buildRemoveScreen(diceResult, channelEmoji, `No more ${LABELS[type]} dice to remove`, iconsOk));
+            return;
+        }
+        const randomIndex = dice(diceResult.roll[type].length) - 1;
+        const removedFace = diceResult.roll[type][randomIndex];
+        diceResult.roll[type].splice(randomIndex, 1);
+        writeData(client, messageRef, 'diceResult', diceResult.roll);
+        //removing a die finalizes the menu, same as pressing Done
+        await interaction.editReply({ content: '', embeds: [statusEmbed(diceResult, channelEmoji, `Removed 1 ${dieFaceLabel(type, removedFace, channelEmoji)}`)], components: [] });
+        return;
+    }
+
+    if (action.startsWith('selectDie-')) {
+        const [type, indexStr] = action.slice('selectDie-'.length).split('-');
+        const index = +indexStr;
+        if (!diceResult.roll[type] || !diceResult.roll[type][index]) {
+            await safeEditReply(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to reroll`, iconsOk));
+            return;
+        }
+        const newFace = rollDice(type);
+        diceResult.roll[type][index] = newFace;
+        writeData(client, messageRef, 'diceResult', diceResult.roll);
+        //picking a die to reroll finalizes the menu, same as pressing Done
+        await interaction.editReply({ content: '', embeds: [statusEmbed(diceResult, channelEmoji, `Rerolled ${dieFaceLabel(type, newFace, channelEmoji)} #${index + 1}`)], components: [] });
+        return;
+    }
+
+    if (action.startsWith('fortuneDie-')) {
+        const [type, indexStr] = action.slice('fortuneDie-'.length).split('-');
+        const index = +indexStr;
+        if (!diceResult.roll[type] || !diceResult.roll[type][index]) {
+            await safeEditReply(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to flip`, iconsOk));
+            return;
+        }
+        await safeEditReply(interaction, (iconsOk) => buildFortuneOptionsScreen(diceResult, channelEmoji, type, index, iconsOk));
+        return;
+    }
+
+    if (action.startsWith('fortuneSwap-')) {
+        const [type, indexStr, optionStr] = action.slice('fortuneSwap-'.length).split('-');
+        const index = +indexStr;
+        const optionIndex = +optionStr;
+        const currentFace = diceResult.roll[type] && diceResult.roll[type][index];
+        const newFace = currentFace && diceFaces[type][currentFace].adjacentposition[optionIndex];
+        if (!newFace) {
+            await safeEditReply(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, `There is no option ${optionIndex + 1} for ${LABELS[type]} #${index + 1}`, iconsOk));
+            return;
+        }
+        diceResult.roll[type][index] = newFace;
+        writeData(client, messageRef, 'diceResult', diceResult.roll);
+        //flipping a die finalizes the menu, same as pressing Done - both faces show as emoji
+        //instead of the "[type] #[position]" identifier used while still picking a die
+        await interaction.editReply({ content: '', embeds: [statusEmbed(diceResult, channelEmoji, `Flipped ${dieFaceLabel(type, currentFace, channelEmoji)} to ${dieFaceLabel(type, newFace, channelEmoji)}`)], components: [] });
+        return;
+    }
 };
 
-module.exports = reroll;
+exports.reroll = reroll;
+exports.onComponent = onComponent;

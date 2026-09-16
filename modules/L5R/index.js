@@ -1,4 +1,9 @@
 exports.commands = require('./commands');
 exports.help = require('./help');
 exports.roll = require('./roll').roll;
+exports.rollCore = require('./roll').rollCore;
 exports.keep = require('./roll').keep;
+exports.rollMenu = require('./roll').rollMenu;
+exports.rollComponent = require('./roll').onComponent;
+exports.rerollMenu = require('./reroll').reroll;
+exports.rerollComponent = require('./reroll').onComponent;

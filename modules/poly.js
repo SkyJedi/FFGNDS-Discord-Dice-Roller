@@ -1,7 +1,12 @@
 const dice = require("./").dice;
 const config = require("../config.json");
+const { getParams } = require('./functions');
 
-function poly(params, message) {
+async function poly(interaction) {
+	//required lazily to avoid a load-order-dependent circular require with ../index
+	//(see modules/functions.js for the full explanation)
+	const main = require('../index');
+	const params = getParams(interaction);
 	let text = 'rolled:';
 	params.forEach(unit => {
 		let modifier = 0;
@@ -42,7 +47,7 @@ function poly(params, message) {
 		let rolls = [];
 
 		if (dieAmount > config.maxRollsPerDie) {
-			message.reply(`Roll exceeds max roll per die limit of ${config.maxRollsPerDie}. Please try again.`);
+			main.respond(interaction, `Roll exceeds max roll per die limit of ${config.maxRollsPerDie}. Please try again.`);
 			return;
 		}
 
@@ -63,7 +68,7 @@ function poly(params, message) {
 			text += ` = ${total}.`;
 		} else text = `Too many dice to display.  Total roll is ${total}.`;
 	});
-	if (text.endsWith('.')) message.reply(text);
+	if (text.endsWith('.')) await main.respond(interaction, text);
 }
 
 module.exports = poly;

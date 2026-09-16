@@ -6,6 +6,7 @@ const readData = async (client, message, dataSet) => {
     let doc = await dbRef.get();
     if (!doc.exists) {
         if (dataSet === 'channelEmoji') return 'swrpg';
+        //legacy per-guild prefix, kept only so we can detect and redirect users still on the old ! commands
         if (dataSet === 'prefix') return prefix;
         return {};
     } else {
@@ -37,6 +38,7 @@ const getDbRef = (client, message, dataSet) => {
         dbRef = dbRef.collection('Guild').doc(message.guild.id);
     }
 
+    //legacy per-guild prefix was stored above the Channel level - keep that path so old data is still reachable
     if (dataSet !== 'prefix') {
         dbRef = dbRef.collection('Channel').doc(message.channel.id);
     }
