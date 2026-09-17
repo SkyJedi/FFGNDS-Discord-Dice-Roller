@@ -186,7 +186,7 @@ const printResults = ({ roll, results }, interaction, desc, channelEmoji, messag
     //token; editing it directly hits the bot's normal REST client, which can 403 with
     //"Missing Access" if the bot has no standing permissions in the channel beyond what the
     //interaction itself grants (see the /roll fix for the same issue)
-    if (messageGif) interaction.webhook.editMessage(messageGif.id, { embeds: [main.textEmbed(finalText(faces))] }).catch(console.error);
+    if (messageGif) interaction.webhook.editMessage(messageGif.id, { embeds: [main.textEmbed(finalText(faces))] }).catch((error) => main.logError('printResults', error));
     else main.respond(interaction, finalText(faces));
 
     main.respond(interaction, `${desc} results: ${response.length > 0 ? response : 'All dice have cancelled out'}`);
@@ -263,7 +263,7 @@ const decodeState = (str) => {
     const [countsPart, descPart] = str.split('|');
     const counts = {};
     (countsPart || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
-    let desc = '';
+    let desc;
     try { desc = decodeURIComponent(descPart || ''); } catch { desc = ''; }
     return { counts, desc };
 };
@@ -450,6 +450,9 @@ const oldRoll = async ({ interaction, client, channelEmoji }) => {
 //---------------------------------------------------------------- roll builder router
 
 const onComponent = async ({ interaction, client }) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
     const parts = interaction.customId.split(':');
     const action = parts[1];
     const state = decodeState(parts[2]);
@@ -526,7 +529,7 @@ const onComponent = async ({ interaction, client }) => {
             await sleep(1200);
             const resultsLine = result.response.length > 0 ? result.response : 'All dice have cancelled out';
             await interaction.webhook.editMessage(publicMessage.id, { embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)] });
-            await interaction.deleteReply().catch(console.error);
+            await interaction.deleteReply().catch((error) => main.logError('roll onComponent', error));
             break;
         }
         default:

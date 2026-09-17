@@ -475,6 +475,9 @@ const buildList = (characterStatus) => {
 //---------------------------------------------------------------- router
 
 const onComponent = async ({ interaction, client }) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
     const parts = interaction.customId.split(':');
     const action = parts[1];
 
@@ -612,7 +615,7 @@ const onComponent = async ({ interaction, client }) => {
             //this session were already announced individually as they happened)
             if (wDelta || sDelta) {
                 await announce(interaction, `${displayName(interaction)} updates ${name}\n\n${buildCharacterStatus(name, target)}`);
-                await interaction.deleteReply().catch(console.error);
+                await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
             }
             break;
         }
@@ -625,7 +628,7 @@ const onComponent = async ({ interaction, client }) => {
             const name = parts[2];
             const target = name && characterStatus[name];
             if (!target) {
-                await interaction.deleteReply().catch(console.error);
+                await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
                 break;
             }
             await interaction.editReply({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });

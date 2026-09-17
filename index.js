@@ -17,6 +17,22 @@ const ClientOptions = {
 };
 const client = new Client(ClientOptions);
 
+//Discord invalidates an interaction if it isn't acknowledged within ~3s (a redeploy/restart or a
+//network blip catching it mid-flight, most often), and a followUp/editReply/deleteReply can
+//likewise fail if the interaction or message it targets is already gone - neither is fixable on
+//our end, so both log as a short one-liner instead of dumping the full DiscordAPIError stack
+//trace every time. Used here and by every module's interaction .catch()es (see roll.js,
+//reroll.js, destiny.js, char.js) that clean up an ephemeral message once they're done with it.
+const EXPECTED_DISCORD_ERROR_CODES = { 10062: 'Unknown interaction', 10008: 'Unknown Message' };
+const logError = (context, error) => {
+    const reason = EXPECTED_DISCORD_ERROR_CODES[error?.code];
+    if (reason) {
+        console.error(`${context}: ${reason} (${error.code}) - interaction/message no longer available, nothing to do`);
+        return;
+    }
+    console.error(context, error);
+};
+
 //none of the interactionCreate/messageCreate/threadCreate listeners below are awaited by
 //discord.js, and none of the handler chains they call into (onInteraction's command switch,
 //onComponent's per-module button routers, ...) wrap themselves in try/catch - so a single
@@ -25,13 +41,13 @@ const client = new Client(ClientOptions);
 //those by default, which looks like the shard randomly dying and needing a full respawn+reconnect
 //instead of just failing that one interaction - these .catch()s and the process-level handlers
 //below keep a single bad interaction from taking the shard down.
-process.on('unhandledRejection', (error) => console.error('Unhandled promise rejection:', error));
-process.on('uncaughtException', (error) => console.error('Uncaught exception:', error));
+process.on('unhandledRejection', (error) => logError('Unhandled promise rejection', error));
+process.on('uncaughtException', (error) => logError('Uncaught exception', error));
 
 client.login(token).catch(error => console.error(error));
 
 // Register our event handlers (defined below):
-client.on('interactionCreate', interaction => handlers.onInteraction({ interaction, client }).catch(console.error));
+client.on('interactionCreate', interaction => handlers.onInteraction({ interaction, client }).catch((error) => logError('onInteraction', error)));
 client.on('messageCreate', message => handlers.onLegacyMessage({ message, client }).catch(console.error));
 client.on('clientReady', async () => {
 });
@@ -57,7 +73,7 @@ const respond = (interaction, payload) => {
     const alreadyResponded = respondedInteractions.has(interaction);
     respondedInteractions.add(interaction);
     const send = alreadyResponded ? interaction.followUp(payload) : interaction.editReply(payload);
-    return send.catch(console.error);
+    return send.catch((error) => logError('respond', error));
 };
 
 const sendMessage = ({ interaction, embed, text, attachment }) => {
@@ -78,4 +94,5 @@ const sendMessage = ({ interaction, embed, text, attachment }) => {
 exports.respond = respond;
 exports.sendMessage = sendMessage;
 exports.textEmbed = textEmbed;
+exports.logError = logError;
 

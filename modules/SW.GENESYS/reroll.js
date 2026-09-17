@@ -261,6 +261,9 @@ const buildFortuneOptionsScreen = (diceResult, channelEmoji, type, index, iconsO
 //---------------------------------------------------------------- router
 
 const onComponent = async ({ interaction, client }) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
     const parts = interaction.customId.split(':');
     const action = parts[1];
     const messageRef = asMessageRef(interaction);
@@ -325,7 +328,7 @@ const onComponent = async ({ interaction, client }) => {
         //added using the same button-shape icons shown on the pool screen.
         await interaction.editReply({ content: '', embeds: [textEmbed('Added!')], components: [] });
         await interaction.followUp({ embeds: [statusEmbed(rolled.diceResult, channelEmoji, buildAddPoolSummary(counts, true, 'Added'))] });
-        await interaction.deleteReply().catch(console.error);
+        await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
         return;
     }
 
@@ -358,7 +361,7 @@ const onComponent = async ({ interaction, client }) => {
             //the menu is ephemeral - close it privately and announce the reroll publicly
             await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
             await interaction.followUp({ embeds: [statusEmbed(rolled.diceResult, channelEmoji, 'Rerolled the same pool')] });
-            await interaction.deleteReply().catch(console.error);
+            await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
             return;
         }
 
@@ -394,7 +397,7 @@ const onComponent = async ({ interaction, client }) => {
         //the menu is ephemeral - close it privately and announce the removal publicly
         await interaction.editReply({ content: '', embeds: [textEmbed('Removed!')], components: [] });
         await interaction.followUp({ embeds: [statusEmbed(diceResult, channelEmoji, `Removed 1 ${dieFaceLabel(type, removedFace, channelEmoji)}`)] });
-        await interaction.deleteReply().catch(console.error);
+        await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
         return;
     }
 
@@ -411,7 +414,7 @@ const onComponent = async ({ interaction, client }) => {
         //the menu is ephemeral - close it privately and announce the reroll publicly
         await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
         await interaction.followUp({ embeds: [statusEmbed(diceResult, channelEmoji, `Rerolled ${dieFaceLabel(type, newFace, channelEmoji)} #${index + 1}`)] });
-        await interaction.deleteReply().catch(console.error);
+        await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
         return;
     }
 
@@ -442,8 +445,7 @@ const onComponent = async ({ interaction, client }) => {
         //show as emoji instead of the "[type] #[position]" identifier used while still picking a die
         await interaction.editReply({ content: '', embeds: [textEmbed('Flipped!')], components: [] });
         await interaction.followUp({ embeds: [statusEmbed(diceResult, channelEmoji, `Flipped ${dieFaceLabel(type, currentFace, channelEmoji)} to ${dieFaceLabel(type, newFace, channelEmoji)}`)] });
-        await interaction.deleteReply().catch(console.error);
-        return;
+        await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
     }
 };
 

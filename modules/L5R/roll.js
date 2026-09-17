@@ -199,7 +199,7 @@ async function printResults(diceResult, interaction, desc, channelEmoji, message
 	//token; editing it directly hits the bot's normal REST client, which can 403 with
 	//"Missing Access" if the bot has no standing permissions in the channel beyond what the
 	//interaction itself grants (see the roll.js /roll fix for the same issue)
-	if (messageGif) interaction.webhook.editMessage(messageGif.id, { embeds: [main.textEmbed(faces)] }).catch(console.error);
+	if (messageGif) interaction.webhook.editMessage(messageGif.id, { embeds: [main.textEmbed(faces)] }).catch((error) => main.logError('printResults', error));
 	else main.respond(interaction, faces);
 
 	main.respond(interaction, desc + " results:" + "\n\n\t" + response);
@@ -457,6 +457,9 @@ const oldRoll = async ({ interaction, client, channelEmoji }) => {
 //---------------------------------------------------------------- roll builder router
 
 const onComponent = async ({ interaction, client }) => {
+	//required lazily to avoid a load-order-dependent circular require with ../../index
+	//(see modules/functions.js for the full explanation)
+	const main = require('../../index');
 	const parts = interaction.customId.split(':');
 	const action = parts[1];
 	const state = decodeState(parts[2]);
@@ -524,7 +527,7 @@ const onComponent = async ({ interaction, client }) => {
 			await sleep(1200);
 			const resultsLine = result.response && result.response.trim().length > 0 ? result.response : 'No symbols rolled';
 			await interaction.webhook.editMessage(publicMessage.id, { embeds: [buildRollResultEmbed(rollLine, result.faces, resultsLine)] });
-			await interaction.deleteReply().catch(console.error);
+			await interaction.deleteReply().catch((error) => main.logError('roll onComponent', error));
 			break;
 		}
 		default:

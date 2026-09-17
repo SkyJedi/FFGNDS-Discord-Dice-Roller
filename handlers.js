@@ -143,7 +143,7 @@ const onLegacyMessage = async ({ message, client }) => {
     await message.reply(
         `${client.user.username} now uses Discord's slash commands instead of \`${prefix}\` commands - type \`/\` to see what's available. ` +
         `If you don't see any slash commands for ${client.user.username}, ask a server admin to re-authorize the bot (this won't duplicate or remove it) here: ${modules.inviteUrl(client.user.id)}`
-    ).catch(console.error);
+    ).catch((error) => main.logError('onLegacyMessage', error));
 };
 
 exports.onInteraction = onInteraction;

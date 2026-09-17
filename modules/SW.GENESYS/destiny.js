@@ -80,6 +80,9 @@ const buildSetModal = () => {
 const showSetModal = (interaction) => interaction.showModal(buildSetModal());
 
 const submitSetModal = async ({ interaction, client }) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
     await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
     const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
@@ -93,7 +96,7 @@ const submitSetModal = async ({ interaction, client }) => {
     //the menu is ephemeral (see handlers.js) - close it privately and announce the new pool publicly
     await interaction.editReply({ content: '', embeds: [textEmbed('Done!')], components: [] });
     await interaction.followUp({ embeds: [textEmbed(`${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
-    await interaction.deleteReply().catch(console.error);
+    await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
 };
 
 //---------------------------------------------------------------- router
@@ -101,6 +104,9 @@ const submitSetModal = async ({ interaction, client }) => {
 //Each button press performs its action immediately and closes the menu (no components left on
 //the reply) so the result is unambiguous about who did what - re-run /destiny to act again.
 const onComponent = async ({ interaction, client }) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
     const action = interaction.customId.split(':')[1];
 
     if (interaction.isModalSubmit()) {
@@ -180,7 +186,7 @@ const onComponent = async ({ interaction, client }) => {
     //the menu is ephemeral - close it privately and announce the change publicly
     await interaction.editReply({ content: '', embeds: [textEmbed('Done!')], components: [] });
     await interaction.followUp({ embeds: [textEmbed(`${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
-    await interaction.deleteReply().catch(console.error);
+    await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
 };
 
 exports.destiny = destiny;
