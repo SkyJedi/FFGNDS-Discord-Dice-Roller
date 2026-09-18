@@ -79,11 +79,13 @@ const buildSetModal = () => {
 //the deferUpdate()+editReply() flow the rest of the component router uses
 const showSetModal = (interaction) => interaction.showModal(buildSetModal());
 
+//this modal is only ever shown from a button (see showSetModal above), so the submission can use
+//update() to edit that same message in one round trip instead of deferUpdate()+editReply() -
+//see modules/SW.GENESYS/roll.js's safeUpdate for the general pattern
 const submitSetModal = async ({ interaction, client }) => {
     //required lazily to avoid a load-order-dependent circular require with ../../index
     //(see modules/functions.js for the full explanation)
     const main = require('../../index');
-    await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
     const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
     const names = namesFor(channelEmoji);
@@ -94,7 +96,7 @@ const submitSetModal = async ({ interaction, client }) => {
     writeBalance(client, messageRef, destinyBalance);
 
     //the menu is ephemeral (see handlers.js) - close it privately and announce the new pool publicly
-    await interaction.editReply({ content: '', embeds: [textEmbed('Done!')], components: [] });
+    await interaction.update({ content: '', embeds: [textEmbed('Done!')], components: [] });
     await interaction.followUp({ embeds: [textEmbed(`${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
     await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
 };
@@ -119,7 +121,8 @@ const onComponent = async ({ interaction, client }) => {
         return;
     }
 
-    await interaction.deferUpdate();
+    //readData/readBalance are Firestore reads, not Discord calls, so they still finish well within
+    //Discord's response window before the single interaction.update() call below
     const messageRef = asMessageRef(interaction);
     const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
     const names = namesFor(channelEmoji);
@@ -127,7 +130,7 @@ const onComponent = async ({ interaction, client }) => {
 
     //Done just closes the menu - it doesn't change the pool, so it skips the write+message flow below
     if (action === 'done') {
-        await interaction.editReply({ content: '', embeds: [textEmbed(buildPoolText(destinyBalance, channelEmoji, names))], components: [] });
+        await interaction.update({ content: '', embeds: [textEmbed(buildPoolText(destinyBalance, channelEmoji, names))], components: [] });
         return;
     }
 
@@ -178,13 +181,13 @@ const onComponent = async ({ interaction, client }) => {
     //an error/no-op (no dice rolled, no points available) stays private - nothing actually
     //happened, so there's nothing worth telling the rest of the table
     if (!changed) {
-        await interaction.editReply({ content: '', embeds: [textEmbed(message)], components: [] });
+        await interaction.update({ content: '', embeds: [textEmbed(message)], components: [] });
         return;
     }
 
     writeBalance(client, messageRef, destinyBalance);
     //the menu is ephemeral - close it privately and announce the change publicly
-    await interaction.editReply({ content: '', embeds: [textEmbed('Done!')], components: [] });
+    await interaction.update({ content: '', embeds: [textEmbed('Done!')], components: [] });
     await interaction.followUp({ embeds: [textEmbed(`${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
     await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
 };

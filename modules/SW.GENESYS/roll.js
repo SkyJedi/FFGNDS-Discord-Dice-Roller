@@ -1,7 +1,6 @@
 const config = require('../../config.json');
 const { diceFaces, order, symbols } = require('./');
 const { dice, emoji, sleep, writeData, asMessageRef, getParams } = require('../');
-const { readData } = require('../data');
 const { flatten } = require('lodash');
 const {
     ActionRowBuilder, ButtonBuilder, ButtonStyle,
@@ -240,16 +239,19 @@ const LABELS = {
 //interaction.member is absent in DMs, so fall back to the username there
 const displayName = (interaction) => interaction.member?.displayName || interaction.user.username;
 
-const emptyState = () => ({ counts: {}, desc: '' });
+const emptyState = (channelEmoji) => ({ counts: {}, desc: '', channelEmoji });
 
-//Pending pool state (counts per die/symbol + description) rides along in every button's customId
-//rather than in memory or Firestore, since this bot runs across multiple shard processes and a
-//button click can't rely on state left over from an earlier interaction - see char.js for the
-//same pattern applied to wound/strain deltas. Counts are capped at MAX_COUNT and the encoded
-//description at MAX_ENCODED_DESC so a customId can never exceed Discord's 100-character limit,
-//even in the worst case where every character of the description needs %-encoding.
+//Pending pool state (counts per die/symbol + description + the channel's system, for icon lookups)
+//rides along in every button's customId rather than in memory or Firestore, since this bot runs
+//across multiple shard processes and a button click can't rely on state left over from an earlier
+//interaction - see char.js for the same pattern applied to wound/strain deltas. This also means
+//every click after the menu is first opened can build its screen with zero Firestore round trips
+//(channelEmoji only needs fetching once, when /roll opens the menu - see roll() below), instead of
+//re-reading it on every single click, which was visibly slow. Counts are capped at MAX_COUNT and
+//the encoded description at MAX_ENCODED_DESC so a customId can never exceed Discord's 100-character
+//limit, even in the worst case where every character of the description needs %-encoding.
 const MAX_COUNT = 9;
-const MAX_ENCODED_DESC = 50;
+const MAX_ENCODED_DESC = 48;
 
 //encodeURIComponent can expand a character to a 3-char %XX escape, so a hard slice can land
 //mid-escape - trim any dangling partial escape left at the cut point before it's used
@@ -257,45 +259,51 @@ const truncateEncoded = (encoded) => encoded.length <= MAX_ENCODED_DESC
     ? encoded
     : encoded.slice(0, MAX_ENCODED_DESC).replace(/%[0-9A-Fa-f]?$/, '');
 
-const encodeState = (state) => `${ALL_TYPES.map(type => state.counts[type] || 0).join(',')}|${truncateEncoded(encodeURIComponent(state.desc || ''))}`;
+//single-character codes keep the channel's system from meaningfully eating into the customId's
+//100-character budget alongside the counts and description above
+const CHANNEL_CODES = { swrpg: 's', genesys: 'g', l5r: 'l' };
+const CHANNEL_CODES_REVERSE = { s: 'swrpg', g: 'genesys', l: 'l5r' };
+
+const encodeState = (state) => `${ALL_TYPES.map(type => state.counts[type] || 0).join(',')}|${truncateEncoded(encodeURIComponent(state.desc || ''))}|${CHANNEL_CODES[state.channelEmoji] || ''}`;
 
 const decodeState = (str) => {
-    const [countsPart, descPart] = str.split('|');
+    const [countsPart, descPart, channelCode] = str.split('|');
     const counts = {};
     (countsPart || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
     let desc;
     try { desc = decodeURIComponent(descPart || ''); } catch { desc = ''; }
-    return { counts, desc };
+    return { counts, desc, channelEmoji: CHANNEL_CODES_REVERSE[channelCode] };
 };
 
 const buildDiceOrder = (counts) => ALL_TYPES.reduce((diceOrder, type) => diceOrder.concat(Array(counts[type] || 0).fill(type)), []);
 
-//dice icons use a dedicated set of flat shape emoji (uploaded to the guild configured as
-//config.buttonEmoji, looked up under the 'buttonEmoji' emoji.json set - see modules/build.js)
-//instead of the per-channel roll-display emoji, since those shapes are button-only and don't
-//depend on which system/channel is active. Symbol icons still use the per-channel set.
+//die-shape icons (hex/diamond/square outlines) are generic flat shapes shared by every system -
+//uploaded once as their own application emoji (see /Emoji's buttonemoji-* files and
+//modules/emoji.js) - so they don't depend on which system/channel is active. Symbol icons
+//(success/advantage/etc.) instead have their own swrpg-/genesys- artwork per system, so they need
+//the channel's actual system to look up the right one; 'swrpg' is a harmless default for the
+//handful of screens built before that's known yet (e.g. the very first /roll button screen),
+//since both systems' symbol icons only differ in style, not meaning.
 const BUTTON_EMOJI_SET = 'buttonEmoji';
 const DIE_BUTTON_EMOJI = {
     yellow: 'YellowHex', green: 'GreenDiamond', blue: 'BlueSquare', red: 'RedHex',
     purple: 'PurpleDiamond', black: 'BlackSquare', white: 'WhiteHex'
 };
 
-//emoji.json omits the entry entirely when modules/build.js couldn't find a matching custom
-//emoji in the guild - only accept a properly resolved <a?:name:id> reference, otherwise fall
-//back to a text label rather than sending Discord a bogus emoji
+//emoji() returns '' when modules/emoji.js has no application emoji cached under that name (not
+//yet fetched at startup, or genuinely missing/not uploaded) - only accept a properly resolved
+//<a?:name:id> reference, otherwise fall back to a text label rather than sending Discord a bogus emoji
 const CUSTOM_EMOJI_PATTERN = /^<a?:\w+:\d+>$/;
 const resolvedEmoji = (name, channelEmoji) => {
     const icon = emoji(name, channelEmoji);
     return CUSTOM_EMOJI_PATTERN.test(icon || '') ? icon : null;
 };
 
-//symbol icons live in the same buttonEmoji set as the dice shapes now (see modules/build.js's
-//"buttons" list) and are keyed by their type name directly, so no name-mapping table is needed.
 //iconsOk=false forces every lookup to skip the emoji and use its text label instead - see
 //safeEditReply() below, which sets this after Discord rejects an emoji id as invalid/stale.
 const dieIcon = (type, iconsOk) => iconsOk ? resolvedEmoji(DIE_BUTTON_EMOJI[type], BUTTON_EMOJI_SET) : null;
-const symbolIcon = (type, iconsOk) => iconsOk ? resolvedEmoji(type, BUTTON_EMOJI_SET) : null;
-const poolIcon = (type, iconsOk) => DIE_TYPES.includes(type) ? dieIcon(type, iconsOk) : symbolIcon(type, iconsOk);
+const symbolIcon = (type, iconsOk, channelEmoji = 'swrpg') => iconsOk ? resolvedEmoji(type, channelEmoji) : null;
+const poolIcon = (type, iconsOk, channelEmoji) => DIE_TYPES.includes(type) ? dieIcon(type, iconsOk) : symbolIcon(type, iconsOk, channelEmoji);
 
 //wraps plain text in a simple embed, for the screens/messages below that don't need the fuller
 //buildRollResultEmbed layout (title + results field)
@@ -303,9 +311,9 @@ const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDesc
 
 //shows each pool entry as "<count><icon>" to match the buttons that add them; falls back to
 //"<count> <name>" for any type whose icon isn't resolved yet
-const buildPoolSummary = (state, iconsOk) => {
+const buildPoolSummary = (state, iconsOk, channelEmoji) => {
     const parts = ALL_TYPES.filter(type => state.counts[type] > 0).map(type => {
-        const icon = poolIcon(type, iconsOk);
+        const icon = poolIcon(type, iconsOk, channelEmoji);
         return icon ? `${state.counts[type]}${icon}` : `${state.counts[type]} ${LABELS[type]}`;
     });
     let text = parts.length ? `Pool: ${parts.join(' ')}` : 'Pool: empty';
@@ -319,17 +327,17 @@ const dieButton = (type, s, iconsOk) => {
     return icon ? button.setEmoji(icon) : button.setLabel(LABELS[type]);
 };
 
-const symbolButton = (type, s, iconsOk) => {
+const symbolButton = (type, s, iconsOk, channelEmoji) => {
     const button = new ButtonBuilder().setCustomId(`roll:add-${type}:${s}`).setStyle(ButtonStyle.Secondary);
-    const icon = symbolIcon(type, iconsOk);
+    const icon = symbolIcon(type, iconsOk, channelEmoji);
     return icon ? button.setEmoji(icon) : button.setLabel(LABELS[type]);
 };
 
-const buildMainScreen = (state, iconsOk = true) => {
+const buildMainScreen = (state, iconsOk = true, channelEmoji) => {
     const s = encodeState(state);
     return {
         content: '',
-        embeds: [textEmbed(buildPoolSummary(state, iconsOk))],
+        embeds: [textEmbed(buildPoolSummary(state, iconsOk, channelEmoji))],
         components: [
             new ActionRowBuilder().addComponents(
                 DIE_TYPES.slice(0, 5).map(type => dieButton(type, s, iconsOk))
@@ -349,17 +357,17 @@ const buildMainScreen = (state, iconsOk = true) => {
     };
 };
 
-const buildSymbolsScreen = (state, iconsOk = true) => {
+const buildSymbolsScreen = (state, iconsOk = true, channelEmoji) => {
     const s = encodeState(state);
     return {
         content: '',
-        embeds: [textEmbed(buildPoolSummary(state, iconsOk))],
+        embeds: [textEmbed(buildPoolSummary(state, iconsOk, channelEmoji))],
         components: [
             new ActionRowBuilder().addComponents(
-                SYMBOL_TYPES.slice(0, 5).map(type => symbolButton(type, s, iconsOk))
+                SYMBOL_TYPES.slice(0, 5).map(type => symbolButton(type, s, iconsOk, channelEmoji))
             ),
             new ActionRowBuilder().addComponents(
-                SYMBOL_TYPES.slice(5).map(type => symbolButton(type, s, iconsOk))
+                SYMBOL_TYPES.slice(5).map(type => symbolButton(type, s, iconsOk, channelEmoji))
             ),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`roll:main:${s}`).setLabel('Back').setStyle(ButtonStyle.Secondary)
@@ -376,11 +384,11 @@ const buildRollResultEmbed = (rollLine, faces, resultsLine) => {
     return embed;
 };
 
-//Discord validates emoji ids against the guild data it has at request time, so a stale/deleted
-//custom emoji id in emoji.json (e.g. re-uploaded after the last /build) only surfaces as a
-//"COMPONENT_INVALID_EMOJI" rejection when the message is actually sent - our own format check
-//in resolvedEmoji() can't catch that in advance. Retry once with icons disabled so the click
-//still succeeds instead of crashing the interaction.
+//Discord validates emoji ids at request time, so a stale/deleted application emoji id (e.g. one
+//deleted and re-uploaded under the same NeoEmoji name since this shard's cache was last loaded -
+//see modules/emoji.js's loadEmojis()) only surfaces as a "COMPONENT_INVALID_EMOJI" rejection when
+//the message is actually sent - our own format check in resolvedEmoji() can't catch that in
+//advance. Retry once with icons disabled so the click still succeeds instead of crashing the interaction.
 const hasInvalidEmojiError = (error) => /INVALID_EMOJI/i.test(JSON.stringify(error?.rawError ?? error?.message ?? ''));
 
 //once Discord has rejected an emoji id, every further click would otherwise pay for a second,
@@ -389,6 +397,8 @@ const hasInvalidEmojiError = (error) => /INVALID_EMOJI/i.test(JSON.stringify(err
 //text labels afterward; a fresh /build + redeploy restarts the process and clears this.
 let iconsKnownBad = false;
 
+//used for the /roll slash command entry point, whose interaction is already deferred by
+//handlers.js before it ever reaches this module - editReply() is the only valid way to complete it
 const safeEditReply = async (interaction, buildScreen) => {
     if (iconsKnownBad) {
         await interaction.editReply(buildScreen(false));
@@ -399,7 +409,30 @@ const safeEditReply = async (interaction, buildScreen) => {
     } catch (error) {
         if (!hasInvalidEmojiError(error)) throw error;
         iconsKnownBad = true;
-        console.error('roll builder: emoji.json has a stale/invalid emoji id, falling back to text labels for the rest of this run - rerun /build and redeploy to refresh it', error);
+        console.error('roll builder: the application emoji cache has a stale/invalid emoji id, falling back to text labels for the rest of this run - run /build (or restart) to refresh it', error);
+        await interaction.editReply(buildScreen(false));
+    }
+};
+
+//used for button clicks (onComponent below), whose interaction arrives unacknowledged. Every
+//pool-builder screen can now be built synchronously (channelEmoji rides along in the encoded
+//state - see decodeState above), so a single interaction.update() both acknowledges the click and
+//edits the message in one Discord API round trip, instead of the slower deferUpdate()+editReply()
+//pair - that extra round trip was the main source of the per-click delay building a pool. If
+//Discord rejects a stale/invalid emoji id, the update() call fails before Discord has accepted any
+//response for this interaction, so it's still safe to fall back to deferUpdate()+editReply().
+const safeUpdate = async (interaction, buildScreen) => {
+    if (iconsKnownBad) {
+        await interaction.update(buildScreen(false));
+        return;
+    }
+    try {
+        await interaction.update(buildScreen(true));
+    } catch (error) {
+        if (!hasInvalidEmojiError(error)) throw error;
+        iconsKnownBad = true;
+        console.error('roll builder: the application emoji cache has a stale/invalid emoji id, falling back to text labels for the rest of this run - run /build (or restart) to refresh it', error);
+        await interaction.deferUpdate();
         await interaction.editReply(buildScreen(false));
     }
 };
@@ -418,8 +451,8 @@ const showDescModal = (interaction, state) => interaction.showModal(buildDescMod
 
 //Slash command entry point for /roll (SWRPG/Genesys channels) - opens the button-driven pool
 //builder. L5R channels open their own button builder too - see modules/L5R/roll.js.
-const roll = async ({ interaction }) => {
-    await safeEditReply(interaction, (iconsOk) => buildMainScreen(emptyState(), iconsOk));
+const roll = async ({ interaction, channelEmoji }) => {
+    await safeEditReply(interaction, (iconsOk) => buildMainScreen(emptyState(channelEmoji), iconsOk, channelEmoji));
 };
 
 //Slash command entry point for /oldroll (SWRPG/Genesys channels) - the pre-button-UI free-text
@@ -456,12 +489,18 @@ const onComponent = async ({ interaction, client }) => {
     const parts = interaction.customId.split(':');
     const action = parts[1];
     const state = decodeState(parts[2]);
+    const messageRef = asMessageRef(interaction);
+    //carried in the encoded state (see encodeState/decodeState above) rather than re-read from
+    //Firestore on every click - it was fetched once, when /roll first opened this menu
+    const channelEmoji = state.channelEmoji;
 
     if (interaction.isModalSubmit()) {
         if (action === 'descModal') {
-            await interaction.deferUpdate();
+            //this modal is only ever shown from a button (see showDescModal below), so the
+            //submission can use update() to edit that same message in one round trip, same as a
+            //plain button click - see safeUpdate above
             state.desc = interaction.fields.getTextInputValue('description').trim();
-            await safeEditReply(interaction, (iconsOk) => buildMainScreen(state, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildMainScreen(state, iconsOk, channelEmoji));
         }
         return;
     }
@@ -471,42 +510,38 @@ const onComponent = async ({ interaction, client }) => {
         return;
     }
 
-    await interaction.deferUpdate();
-    const messageRef = asMessageRef(interaction);
-
     if (action.startsWith('add-')) {
         const type = action.slice(4);
         state.counts[type] = Math.min((state.counts[type] || 0) + 1, MAX_COUNT);
-        await safeEditReply(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildSymbolsScreen(state, iconsOk) : buildMainScreen(state, iconsOk));
+        await safeUpdate(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildSymbolsScreen(state, iconsOk, channelEmoji) : buildMainScreen(state, iconsOk, channelEmoji));
         return;
     }
 
     switch (action) {
         case 'symbols':
-            await safeEditReply(interaction, (iconsOk) => buildSymbolsScreen(state, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildSymbolsScreen(state, iconsOk, channelEmoji));
             break;
         case 'main':
-            await safeEditReply(interaction, (iconsOk) => buildMainScreen(state, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildMainScreen(state, iconsOk, channelEmoji));
             break;
         case 'clear':
             state.counts = {};
-            await safeEditReply(interaction, (iconsOk) => buildMainScreen(state, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildMainScreen(state, iconsOk, channelEmoji));
             break;
         case 'roll': {
             const diceOrder = buildDiceOrder(state.counts);
             if (!diceOrder.length) {
-                await safeEditReply(interaction, (iconsOk) => {
-                    const screen = buildMainScreen(state, iconsOk);
-                    screen.embeds = [textEmbed(`No dice in the pool - add some first.\n\n${buildPoolSummary(state, iconsOk)}`)];
+                await safeUpdate(interaction, (iconsOk) => {
+                    const screen = buildMainScreen(state, iconsOk, channelEmoji);
+                    screen.embeds = [textEmbed(`No dice in the pool - add some first.\n\n${buildPoolSummary(state, iconsOk, channelEmoji)}`)];
                     return screen;
                 });
                 break;
             }
 
-            const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
             const result = rollCore({ diceOrder, channelEmoji });
             if (result.error) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(result.error)], components: [] });
+                await interaction.update({ content: '', embeds: [textEmbed(result.error)], components: [] });
                 break;
             }
 
@@ -517,7 +552,8 @@ const onComponent = async ({ interaction, client }) => {
             //be edited back to another ephemeral message - the actual result has to go out as a
             //fresh, public followUp() instead. Clear its buttons immediately so a click during the
             //reveal below can't trigger a second roll, then delete it once the public post is up.
-            await interaction.editReply({ content: '', embeds: [textEmbed('Rolled!')], components: [] });
+            //update() (not deferUpdate()+editReply()) since this first response needs no async prep.
+            await interaction.update({ content: '', embeds: [textEmbed('Rolled!')], components: [] });
 
             //show the animated gif faces first, then swap to the static faces once they've had a
             //moment to play - matches the old text-based /roll's two-stage editReply.
@@ -561,3 +597,4 @@ exports.dieIcon = dieIcon;
 exports.symbolIcon = symbolIcon;
 exports.poolIcon = poolIcon;
 exports.safeEditReply = safeEditReply;
+exports.safeUpdate = safeUpdate;

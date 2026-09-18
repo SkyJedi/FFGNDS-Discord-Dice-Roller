@@ -18,7 +18,7 @@ const l5rRerollComponent = require('./modules/L5R/').rerollComponent;
 const SYSTEM_AGNOSTIC_COMMANDS = ['stats', 'ver', 'poly', 'swrpg', 'genesys', 'l5r', 'invite', 'help', 'roll'];
 const SW_GENESYS_COMMANDS = ['character', 'crit', 'shipcrit', 'species', 'gleepglop', 'destiny', 'story', 'initiative', 'reroll', 'obligation', 'duty', 'oldroll'];
 const L5R_COMMANDS = ['keep', 'add', 'reroll', 'oldroll'];
-const ADMIN_COMMANDS = ['restart', 'build'];
+const ADMIN_COMMANDS = ['restart'];
 
 //Routes button clicks and modal submissions from the interactive /character, /destiny, and /roll menus.
 //Prefixed customIds let this stay a simple dispatch table as more features grow their own UIs.

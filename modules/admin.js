@@ -1,5 +1,3 @@
-const build = require('./build');
-
 const admin = async ({ client, interaction, command }) => {
     //required lazily to avoid a load-order-dependent circular require with ../index
     //(see modules/functions.js for the full explanation)
@@ -12,10 +10,6 @@ const admin = async ({ client, interaction, command }) => {
         case 'fix':
             break;
         case 'test':
-            break;
-        case 'build':
-            await build(client);
-            await main.respond(interaction, 'Emoji cache rebuilt.');
             break;
         default:
             break;

@@ -5,6 +5,7 @@
 const { Client, Options, Partials, GatewayIntentBits, EmbedBuilder, Colors } = require('discord.js');
 const { token } = require('./config');
 const handlers = require('./handlers');
+const emoji = require('./modules/emoji');
 
 const ClientOptions = {
     makeCache: Options.cacheWithLimits({
@@ -17,17 +18,23 @@ const ClientOptions = {
 };
 const client = new Client(ClientOptions);
 
-//Discord invalidates an interaction if it isn't acknowledged within ~3s (a redeploy/restart or a
-//network blip catching it mid-flight, most often), and a followUp/editReply/deleteReply can
-//likewise fail if the interaction or message it targets is already gone - neither is fixable on
-//our end, so both log as a short one-liner instead of dumping the full DiscordAPIError stack
-//trace every time. Used here and by every module's interaction .catch()es (see roll.js,
-//reroll.js, destiny.js, char.js) that clean up an ephemeral message once they're done with it.
-const EXPECTED_DISCORD_ERROR_CODES = { 10062: 'Unknown interaction', 10008: 'Unknown Message' };
+//A handful of error codes are expected, non-actionable noise rather than real bugs, so they log
+//as a short one-liner instead of dumping a full stack trace every time:
+// - 10062/10008 (Discord): the interaction or message an editReply/followUp/deleteReply targeted
+//   is already gone - most often because the interaction's ~3s acknowledgment window closed
+//   (a redeploy/restart or network blip catching it mid-flight), which isn't fixable on our end.
+// - ERR_IPC_CHANNEL_CLOSED (Node/discord.js): a shard's child process tried to notify the parent
+//   ShardingManager over their internal IPC pipe (see start.js) after the parent had already
+//   started shutting down - a normal race during a restart, not something our code triggers.
+// - 50013 (Discord): the bot lacks a permission it needs in that channel (e.g. Send Messages) -
+//   only a server admin can fix that, so there's nothing for our code to do about it either.
+// Used here and by every module's interaction .catch()es (see roll.js, reroll.js, destiny.js,
+// char.js) that clean up an ephemeral message once they're done with it.
+const EXPECTED_ERROR_CODES = { 10062: 'Unknown interaction', 10008: 'Unknown Message', ERR_IPC_CHANNEL_CLOSED: 'IPC channel closed', 50013: 'Missing Permissions' };
 const logError = (context, error) => {
-    const reason = EXPECTED_DISCORD_ERROR_CODES[error?.code];
+    const reason = EXPECTED_ERROR_CODES[error?.code];
     if (reason) {
-        console.error(`${context}: ${reason} (${error.code}) - interaction/message no longer available, nothing to do`);
+        console.error(`${context}: ${reason} (${error.code}) - nothing to do`);
         return;
     }
     console.error(context, error);
@@ -50,6 +57,8 @@ client.login(token).catch(error => console.error(error));
 client.on('interactionCreate', interaction => handlers.onInteraction({ interaction, client }).catch((error) => logError('onInteraction', error)));
 client.on('messageCreate', message => handlers.onLegacyMessage({ message, client }).catch(console.error));
 client.on('clientReady', async () => {
+    const count = await emoji.loadEmojis(client).catch((error) => logError('loadEmojis', error));
+    if (count !== undefined) console.log(`Loaded ${count} application emoji`);
 });
 
 client.on('threadCreate', async (thread) => {

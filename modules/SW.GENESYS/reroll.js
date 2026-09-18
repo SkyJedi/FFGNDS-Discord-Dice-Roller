@@ -10,7 +10,7 @@ const {
 const swRoll = require('./roll');
 const {
     rollCore, rollDice, countSymbols, buildResultText, buildRollResultEmbed, buildDiceOrder,
-    DIE_TYPES, SYMBOL_TYPES, ALL_TYPES, LABELS, MAX_COUNT, poolIcon, safeEditReply
+    DIE_TYPES, SYMBOL_TYPES, ALL_TYPES, LABELS, MAX_COUNT, poolIcon, safeUpdate
 } = swRoll;
 
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
@@ -62,36 +62,43 @@ const reroll = async ({ interaction, client, channelEmoji }) => {
 
 //---------------------------------------------------------------- add (button pool builder)
 
-const encodeAddState = (counts) => ALL_TYPES.map(type => counts[type] || 0).join(',');
+//the channel's system rides along here too (single-character coded, same scheme as
+//modules/SW.GENESYS/roll.js's encodeState) so it's fetched once - when the "Add" button first
+//opens this pool (see onComponent's 'add' case below) - instead of on every subsequent click
+const CHANNEL_CODES = { swrpg: 's', genesys: 'g', l5r: 'l' };
+const CHANNEL_CODES_REVERSE = { s: 'swrpg', g: 'genesys', l: 'l5r' };
+
+const encodeAddState = (counts, channelEmoji) => `${ALL_TYPES.map(type => counts[type] || 0).join(',')}|${CHANNEL_CODES[channelEmoji] || ''}`;
 
 const decodeAddState = (str) => {
+    const [countsPart, channelCode] = (str || '').split('|');
     const counts = {};
-    (str || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
-    return counts;
+    (countsPart || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
+    return { counts, channelEmoji: CHANNEL_CODES_REVERSE[channelCode] };
 };
 
-const poolButton = (type, s, iconsOk) => {
+const poolButton = (type, s, iconsOk, channelEmoji) => {
     const button = new ButtonBuilder().setCustomId(`reroll:addPoolAdd-${type}:${s}`).setStyle(ButtonStyle.Secondary);
-    const icon = poolIcon(type, iconsOk);
+    const icon = poolIcon(type, iconsOk, channelEmoji);
     return icon ? button.setEmoji(icon) : button.setLabel(LABELS[type]);
 };
 
-const buildAddPoolSummary = (counts, iconsOk, prefix = 'Adding') => {
+const buildAddPoolSummary = (counts, iconsOk, channelEmoji, prefix = 'Adding') => {
     const parts = ALL_TYPES.filter(type => counts[type] > 0).map(type => {
-        const icon = poolIcon(type, iconsOk);
+        const icon = poolIcon(type, iconsOk, channelEmoji);
         return icon ? `${counts[type]}${icon}` : `${counts[type]} ${LABELS[type]}`;
     });
     return parts.length ? `${prefix}: ${parts.join(' ')}` : `${prefix}: nothing selected`;
 };
 
-const buildAddPoolMainScreen = (counts, iconsOk = true) => {
-    const s = encodeAddState(counts);
+const buildAddPoolMainScreen = (counts, iconsOk = true, channelEmoji) => {
+    const s = encodeAddState(counts, channelEmoji);
     return {
         content: '',
-        embeds: [textEmbed(buildAddPoolSummary(counts, iconsOk))],
+        embeds: [textEmbed(buildAddPoolSummary(counts, iconsOk, channelEmoji))],
         components: [
-            new ActionRowBuilder().addComponents(DIE_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk))),
-            new ActionRowBuilder().addComponents(DIE_TYPES.slice(5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(DIE_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
+            new ActionRowBuilder().addComponents(DIE_TYPES.slice(5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`reroll:addPoolSymbols:${s}`).setLabel('Symbols').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId(`reroll:addPoolRoll:${s}`).setLabel('Add').setStyle(ButtonStyle.Success),
@@ -101,14 +108,14 @@ const buildAddPoolMainScreen = (counts, iconsOk = true) => {
     };
 };
 
-const buildAddPoolSymbolsScreen = (counts, iconsOk = true) => {
-    const s = encodeAddState(counts);
+const buildAddPoolSymbolsScreen = (counts, iconsOk = true, channelEmoji) => {
+    const s = encodeAddState(counts, channelEmoji);
     return {
         content: '',
-        embeds: [textEmbed(buildAddPoolSummary(counts, iconsOk))],
+        embeds: [textEmbed(buildAddPoolSummary(counts, iconsOk, channelEmoji))],
         components: [
-            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk))),
-            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
+            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`reroll:addPoolMain:${s}`).setLabel('Back').setStyle(ButtonStyle.Secondary)
             )
@@ -120,9 +127,9 @@ const buildAddPoolSymbolsScreen = (counts, iconsOk = true) => {
 
 //removal is random within a type rather than a specific die, so these use the button-shape
 //poolIcon (like Add's buttons) instead of any one face's emoji
-const removeButton = (type, count, iconsOk) => {
+const removeButton = (type, count, iconsOk, channelEmoji) => {
     const button = new ButtonBuilder().setCustomId(`reroll:removeColor-${type}`).setStyle(ButtonStyle.Danger);
-    const icon = poolIcon(type, iconsOk);
+    const icon = poolIcon(type, iconsOk, channelEmoji);
     if (icon) button.setEmoji(icon);
     button.setLabel(icon ? `${count}` : `${LABELS[type]} (${count})`);
     return button;
@@ -140,7 +147,7 @@ const buildRemoveScreen = (diceResult, channelEmoji, note, iconsOk = true) => {
     const rows = [];
     for (let i = 0; i < present.length; i += 5) {
         rows.push(new ActionRowBuilder().addComponents(
-            present.slice(i, i + 5).map(type => removeButton(type, diceResult.roll[type].length, iconsOk))
+            present.slice(i, i + 5).map(type => removeButton(type, diceResult.roll[type].length, iconsOk, channelEmoji))
         ));
     }
     rows.push(backRow());
@@ -269,47 +276,46 @@ const onComponent = async ({ interaction, client }) => {
     const messageRef = asMessageRef(interaction);
 
     //---- add (pool builder) ----
+    //only 'add' (the entry point) needs a Firestore read for channelEmoji - it's then carried in
+    //the encoded state (see encodeAddState/decodeAddState above) for every click after this one.
+    //These all use safeUpdate (a single interaction.update() call) rather than
+    //deferUpdate()+editReply(), since every screen here builds synchronously (or, for 'add' and
+    //'addPoolRoll', after only a quick Firestore read) - see modules/SW.GENESYS/roll.js's safeUpdate.
     if (action === 'add') {
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => buildAddPoolMainScreen({}, iconsOk));
+        const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
+        await safeUpdate(interaction, (iconsOk) => buildAddPoolMainScreen({}, iconsOk, channelEmoji));
         return;
     }
     if (action.startsWith('addPoolAdd-')) {
-        const counts = decodeAddState(parts[2]);
+        const { counts, channelEmoji } = decodeAddState(parts[2]);
         const type = action.slice('addPoolAdd-'.length);
         counts[type] = Math.min((counts[type] || 0) + 1, MAX_COUNT);
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildAddPoolSymbolsScreen(counts, iconsOk) : buildAddPoolMainScreen(counts, iconsOk));
+        await safeUpdate(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildAddPoolSymbolsScreen(counts, iconsOk, channelEmoji) : buildAddPoolMainScreen(counts, iconsOk, channelEmoji));
         return;
     }
     if (action === 'addPoolSymbols') {
-        const counts = decodeAddState(parts[2]);
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => buildAddPoolSymbolsScreen(counts, iconsOk));
+        const { counts, channelEmoji } = decodeAddState(parts[2]);
+        await safeUpdate(interaction, (iconsOk) => buildAddPoolSymbolsScreen(counts, iconsOk, channelEmoji));
         return;
     }
     if (action === 'addPoolMain') {
-        const counts = decodeAddState(parts[2]);
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => buildAddPoolMainScreen(counts, iconsOk));
+        const { counts, channelEmoji } = decodeAddState(parts[2]);
+        await safeUpdate(interaction, (iconsOk) => buildAddPoolMainScreen(counts, iconsOk, channelEmoji));
         return;
     }
     if (action === 'addPoolCancel') {
-        await interaction.deferUpdate();
-        const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
+        const { channelEmoji } = decodeAddState(parts[2]);
         const diceResult = await readDiceResult(client, messageRef);
-        await interaction.editReply(diceResult ? buildMenu(diceResult, channelEmoji) : noRollScreen());
+        await interaction.update(diceResult ? buildMenu(diceResult, channelEmoji) : noRollScreen());
         return;
     }
     if (action === 'addPoolRoll') {
-        const counts = decodeAddState(parts[2]);
-        await interaction.deferUpdate();
-        const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
+        const { counts, channelEmoji } = decodeAddState(parts[2]);
         const diceOrder = buildDiceOrder(counts);
         if (!diceOrder.length) {
-            await safeEditReply(interaction, (iconsOk) => {
-                const screen = buildAddPoolMainScreen(counts, iconsOk);
-                screen.embeds = [textEmbed(`Pick some dice to add first.\n\n${buildAddPoolSummary(counts, iconsOk)}`)];
+            await safeUpdate(interaction, (iconsOk) => {
+                const screen = buildAddPoolMainScreen(counts, iconsOk, channelEmoji);
+                screen.embeds = [textEmbed(`Pick some dice to add first.\n\n${buildAddPoolSummary(counts, iconsOk, channelEmoji)}`)];
                 return screen;
             });
             return;
@@ -318,7 +324,7 @@ const onComponent = async ({ interaction, client }) => {
         const previousRoll = await readData(client, messageRef, 'diceResult');
         const rolled = rollCore({ diceOrder, channelEmoji, diceResult: { roll: { ...previousRoll } } });
         if (rolled.error) {
-            await interaction.editReply({ content: '', embeds: [textEmbed(rolled.error)], components: [] });
+            await interaction.update({ content: '', embeds: [textEmbed(rolled.error)], components: [] });
             return;
         }
         writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
@@ -326,27 +332,28 @@ const onComponent = async ({ interaction, client }) => {
         //another private message - the actual change has to go out as a fresh public followUp()
         //instead, with the private message just closing out to confirm. The note names what was
         //added using the same button-shape icons shown on the pool screen.
-        await interaction.editReply({ content: '', embeds: [textEmbed('Added!')], components: [] });
-        await interaction.followUp({ embeds: [statusEmbed(rolled.diceResult, channelEmoji, buildAddPoolSummary(counts, true, 'Added'))] });
+        await interaction.update({ content: '', embeds: [textEmbed('Added!')], components: [] });
+        await interaction.followUp({ embeds: [statusEmbed(rolled.diceResult, channelEmoji, buildAddPoolSummary(counts, true, channelEmoji, 'Added'))] });
         await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
         return;
     }
 
-    await interaction.deferUpdate();
+    //two Firestore reads, not Discord calls, so they still finish well within Discord's response
+    //window before the single interaction.update()/safeUpdate() call each branch below ends with
     const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
     const diceResult = await readDiceResult(client, messageRef);
     if (!diceResult) {
-        await interaction.editReply(noRollScreen());
+        await interaction.update(noRollScreen());
         return;
     }
 
     switch (action) {
         case 'menu':
-            await interaction.editReply(buildMenu(diceResult, channelEmoji));
+            await interaction.update(buildMenu(diceResult, channelEmoji));
             return;
 
         case 'done':
-            await interaction.editReply({ content: '', embeds: [statusEmbed(diceResult, channelEmoji)], components: [] });
+            await interaction.update({ content: '', embeds: [statusEmbed(diceResult, channelEmoji)], components: [] });
             return;
 
         case 'same': {
@@ -354,27 +361,27 @@ const onComponent = async ({ interaction, client }) => {
             Object.keys(diceResult.roll).forEach(type => diceResult.roll[type].forEach(() => rebuilt.push(type)));
             const rolled = rollCore({ diceOrder: rebuilt, channelEmoji });
             if (rolled.error) {
-                await interaction.editReply(buildMenu(diceResult, channelEmoji, rolled.error));
+                await interaction.update(buildMenu(diceResult, channelEmoji, rolled.error));
                 return;
             }
             writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
             //the menu is ephemeral - close it privately and announce the reroll publicly
-            await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
+            await interaction.update({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
             await interaction.followUp({ embeds: [statusEmbed(rolled.diceResult, channelEmoji, 'Rerolled the same pool')] });
             await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
             return;
         }
 
         case 'removeScreen':
-            await safeEditReply(interaction, (iconsOk) => buildRemoveScreen(diceResult, channelEmoji, undefined, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildRemoveScreen(diceResult, channelEmoji, undefined, iconsOk));
             return;
 
         case 'selectScreen':
-            await safeEditReply(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, undefined, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, undefined, iconsOk));
             return;
 
         case 'fortuneScreen':
-            await safeEditReply(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, undefined, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, undefined, iconsOk));
             return;
 
         default:
@@ -387,7 +394,7 @@ const onComponent = async ({ interaction, client }) => {
     if (action.startsWith('removeColor-')) {
         const type = action.slice('removeColor-'.length);
         if (!diceResult.roll[type] || diceResult.roll[type].length === 0) {
-            await safeEditReply(interaction, (iconsOk) => buildRemoveScreen(diceResult, channelEmoji, `No more ${LABELS[type]} dice to remove`, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildRemoveScreen(diceResult, channelEmoji, `No more ${LABELS[type]} dice to remove`, iconsOk));
             return;
         }
         const randomIndex = dice(diceResult.roll[type].length) - 1;
@@ -395,7 +402,7 @@ const onComponent = async ({ interaction, client }) => {
         diceResult.roll[type].splice(randomIndex, 1);
         writeData(client, messageRef, 'diceResult', diceResult.roll);
         //the menu is ephemeral - close it privately and announce the removal publicly
-        await interaction.editReply({ content: '', embeds: [textEmbed('Removed!')], components: [] });
+        await interaction.update({ content: '', embeds: [textEmbed('Removed!')], components: [] });
         await interaction.followUp({ embeds: [statusEmbed(diceResult, channelEmoji, `Removed 1 ${dieFaceLabel(type, removedFace, channelEmoji)}`)] });
         await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
         return;
@@ -405,14 +412,14 @@ const onComponent = async ({ interaction, client }) => {
         const [type, indexStr] = action.slice('selectDie-'.length).split('-');
         const index = +indexStr;
         if (!diceResult.roll[type] || !diceResult.roll[type][index]) {
-            await safeEditReply(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to reroll`, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to reroll`, iconsOk));
             return;
         }
         const newFace = rollDice(type);
         diceResult.roll[type][index] = newFace;
         writeData(client, messageRef, 'diceResult', diceResult.roll);
         //the menu is ephemeral - close it privately and announce the reroll publicly
-        await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
+        await interaction.update({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
         await interaction.followUp({ embeds: [statusEmbed(diceResult, channelEmoji, `Rerolled ${dieFaceLabel(type, newFace, channelEmoji)} #${index + 1}`)] });
         await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
         return;
@@ -422,10 +429,10 @@ const onComponent = async ({ interaction, client }) => {
         const [type, indexStr] = action.slice('fortuneDie-'.length).split('-');
         const index = +indexStr;
         if (!diceResult.roll[type] || !diceResult.roll[type][index]) {
-            await safeEditReply(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to flip`, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to flip`, iconsOk));
             return;
         }
-        await safeEditReply(interaction, (iconsOk) => buildFortuneOptionsScreen(diceResult, channelEmoji, type, index, iconsOk));
+        await safeUpdate(interaction, (iconsOk) => buildFortuneOptionsScreen(diceResult, channelEmoji, type, index, iconsOk));
         return;
     }
 
@@ -436,14 +443,14 @@ const onComponent = async ({ interaction, client }) => {
         const currentFace = diceResult.roll[type] && diceResult.roll[type][index];
         const newFace = currentFace && diceFaces[type][currentFace].adjacentposition[optionIndex];
         if (!newFace) {
-            await safeEditReply(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, `There is no option ${optionIndex + 1} for ${LABELS[type]} #${index + 1}`, iconsOk));
+            await safeUpdate(interaction, (iconsOk) => buildFortuneScreen(diceResult, channelEmoji, `There is no option ${optionIndex + 1} for ${LABELS[type]} #${index + 1}`, iconsOk));
             return;
         }
         diceResult.roll[type][index] = newFace;
         writeData(client, messageRef, 'diceResult', diceResult.roll);
         //the menu is ephemeral - close it privately and announce the flip publicly. Both faces
         //show as emoji instead of the "[type] #[position]" identifier used while still picking a die
-        await interaction.editReply({ content: '', embeds: [textEmbed('Flipped!')], components: [] });
+        await interaction.update({ content: '', embeds: [textEmbed('Flipped!')], components: [] });
         await interaction.followUp({ embeds: [statusEmbed(diceResult, channelEmoji, `Flipped ${dieFaceLabel(type, currentFace, channelEmoji)} to ${dieFaceLabel(type, newFace, channelEmoji)}`)] });
         await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
     }

@@ -14,8 +14,8 @@ const {
 
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
-//L5R has no button-shape icon set (see modules/L5R/roll.js's pool builder), but its per-channel
-//emoji set does have a face emoji for every die/symbol result - Select's buttons use those
+//Select's buttons show each specific rolled die's own face (e.g. "blackst"), unlike the Add pool
+//builder below (and modules/L5R/roll.js's own) which only need one generic icon per type
 const CUSTOM_EMOJI_PATTERN = /^<a?:\w+:\d+>$/;
 const dieFaceIcon = (type, face, channelEmoji, iconsOk) => {
 	if (!iconsOk) return null;
@@ -32,19 +32,24 @@ const dieFaceLabel = (type, face, channelEmoji) => dieFaceIcon(type, face, chann
 //skip straight to text labels afterward - same idea as roll.js's safeEditReply (SWRPG/Genesys)
 const hasInvalidEmojiError = (error) => /INVALID_EMOJI/i.test(JSON.stringify(error?.rawError ?? error?.message ?? ''));
 let iconsKnownBad = false;
-//buildScreen may be async (buildSelectScreen awaits buildResultText), so its result is always
-//awaited before being handed to editReply - unlike SWRPG/Genesys's synchronous equivalent
-const safeEditReply = async (interaction, buildScreen) => {
+
+//used for button clicks (onComponent below), whose interaction arrives unacknowledged. Every
+//screen here builds after only Firestore reads (never a Discord call), so a single
+//interaction.update() both acknowledges the click and edits the message in one Discord API round
+//trip, instead of the slower deferUpdate()+editReply() pair - see
+//modules/SW.GENESYS/roll.js's safeUpdate for the fuller explanation.
+const safeUpdate = async (interaction, buildScreen) => {
 	if (iconsKnownBad) {
-		await interaction.editReply(await buildScreen(false));
+		await interaction.update(await buildScreen(false));
 		return;
 	}
 	try {
-		await interaction.editReply(await buildScreen(true));
+		await interaction.update(await buildScreen(true));
 	} catch (error) {
 		if (!hasInvalidEmojiError(error)) throw error;
 		iconsKnownBad = true;
-		console.error('L5R reroll: emoji.json has a stale/invalid emoji id, falling back to text labels for the rest of this run', error);
+		console.error('L5R reroll: the application emoji cache has a stale/invalid emoji id, falling back to text labels for the rest of this run - run /build (or restart) to refresh it', error);
+		await interaction.deferUpdate();
 		await interaction.editReply(await buildScreen(false));
 	}
 };
@@ -95,8 +100,8 @@ const reroll = async ({ interaction, client, channelEmoji }) => {
 
 //---------------------------------------------------------------- add (button pool builder)
 
-//L5R has no button-shape icon set either, so - like modules/L5R/roll.js's own pool builder -
-//these buttons use text labels only
+//text labels only for now - unlike modules/L5R/roll.js's own pool builder, this one doesn't yet
+//carry channelEmoji through its encoded state, which icons would need
 const encodeAddState = (counts) => ALL_TYPES.map(type => counts[type] || 0).join(',');
 
 const decodeAddState = (str) => {
@@ -217,80 +222,76 @@ const onComponent = async ({ interaction, client }) => {
 
 	//---- add (pool builder) ----
 	if (action === 'add') {
-		await interaction.deferUpdate();
-		await interaction.editReply(buildAddPoolMainScreen({}));
+		await interaction.update(buildAddPoolMainScreen({}));
 		return;
 	}
 	if (action.startsWith('addPoolAdd-')) {
 		const counts = decodeAddState(parts[2]);
 		const type = action.slice('addPoolAdd-'.length);
 		counts[type] = Math.min((counts[type] || 0) + 1, MAX_COUNT);
-		await interaction.deferUpdate();
-		await interaction.editReply(SYMBOL_TYPES.includes(type) ? buildAddPoolSymbolsScreen(counts) : buildAddPoolMainScreen(counts));
+		await interaction.update(SYMBOL_TYPES.includes(type) ? buildAddPoolSymbolsScreen(counts) : buildAddPoolMainScreen(counts));
 		return;
 	}
 	if (action === 'addPoolSymbols') {
 		const counts = decodeAddState(parts[2]);
-		await interaction.deferUpdate();
-		await interaction.editReply(buildAddPoolSymbolsScreen(counts));
+		await interaction.update(buildAddPoolSymbolsScreen(counts));
 		return;
 	}
 	if (action === 'addPoolMain') {
 		const counts = decodeAddState(parts[2]);
-		await interaction.deferUpdate();
-		await interaction.editReply(buildAddPoolMainScreen(counts));
+		await interaction.update(buildAddPoolMainScreen(counts));
 		return;
 	}
 	if (action === 'addPoolCancel') {
-		await interaction.deferUpdate();
 		const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
 		const diceResult = await readDiceResult(client, messageRef);
-		await interaction.editReply(diceResult ? await buildMenu(diceResult, channelEmoji) : noRollScreen());
+		await interaction.update(diceResult ? await buildMenu(diceResult, channelEmoji) : noRollScreen());
 		return;
 	}
 	if (action === 'addPoolRoll') {
 		const counts = decodeAddState(parts[2]);
-		await interaction.deferUpdate();
 		const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
 		const diceOrder = buildDiceOrder(counts);
 		if (!diceOrder.length) {
 			const screen = buildAddPoolMainScreen(counts);
 			screen.embeds = [textEmbed(`Pick some dice to add first.\n\n${buildAddPoolSummary(counts)}`)];
-			await interaction.editReply(screen);
+			await interaction.update(screen);
 			return;
 		}
 
 		const previousRoll = await readData(client, messageRef, 'diceResult');
 		const rolled = await rollCore({ diceOrder, channelEmoji, diceResult: { roll: { ...initDiceResult().roll, ...previousRoll } } });
 		if (rolled.error) {
-			await interaction.editReply({ content: '', embeds: [textEmbed(rolled.error)], components: [] });
+			await interaction.update({ content: '', embeds: [textEmbed(rolled.error)], components: [] });
 			return;
 		}
 		writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
 		//the menu itself is ephemeral (see handlers.js), so it can only ever be edited back to
 		//another private message - the actual change has to go out as a fresh public followUp()
 		//instead, with the private message just closing out to confirm
-		await interaction.editReply({ content: '', embeds: [textEmbed('Added!')], components: [] });
+		await interaction.update({ content: '', embeds: [textEmbed('Added!')], components: [] });
 		await interaction.followUp({ embeds: [await statusEmbed(rolled.diceResult, channelEmoji, buildAddPoolSummary(counts, 'Added'))] });
 		await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
 		return;
 	}
 
-	await interaction.deferUpdate();
+	//readData/readDiceResult are Firestore reads, not Discord calls, so they still finish well
+	//within Discord's response window before the single interaction.update()/safeUpdate() call
+	//each branch below ends with
 	const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
 	const diceResult = await readDiceResult(client, messageRef);
 	if (!diceResult) {
-		await interaction.editReply(noRollScreen());
+		await interaction.update(noRollScreen());
 		return;
 	}
 
 	switch (action) {
 		case 'menu':
-			await interaction.editReply(await buildMenu(diceResult, channelEmoji));
+			await interaction.update(await buildMenu(diceResult, channelEmoji));
 			return;
 
 		case 'done':
-			await interaction.editReply({ content: '', embeds: [await statusEmbed(diceResult, channelEmoji)], components: [] });
+			await interaction.update({ content: '', embeds: [await statusEmbed(diceResult, channelEmoji)], components: [] });
 			return;
 
 		case 'same': {
@@ -298,23 +299,23 @@ const onComponent = async ({ interaction, client }) => {
 			Object.keys(diceResult.roll).forEach(type => diceResult.roll[type].forEach(() => rebuilt.push(type)));
 			const rolled = await rollCore({ diceOrder: rebuilt, channelEmoji });
 			if (rolled.error) {
-				await interaction.editReply(await buildMenu(diceResult, channelEmoji, rolled.error));
+				await interaction.update(await buildMenu(diceResult, channelEmoji, rolled.error));
 				return;
 			}
 			writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
 			//the menu is ephemeral - close it privately and announce the reroll publicly
-			await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
+			await interaction.update({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
 			await interaction.followUp({ embeds: [await statusEmbed(rolled.diceResult, channelEmoji, 'Rerolled the same pool')] });
 			await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
 			return;
 		}
 
 		case 'removeScreen':
-			await interaction.editReply(await buildRemoveScreen(diceResult, channelEmoji));
+			await interaction.update(await buildRemoveScreen(diceResult, channelEmoji));
 			return;
 
 		case 'selectScreen':
-			await safeEditReply(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, undefined, iconsOk));
+			await safeUpdate(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, undefined, iconsOk));
 			return;
 
 		default:
@@ -327,7 +328,7 @@ const onComponent = async ({ interaction, client }) => {
 	if (action.startsWith('removeType-')) {
 		const type = action.slice('removeType-'.length);
 		if (!diceResult.roll[type] || diceResult.roll[type].length === 0) {
-			await interaction.editReply(await buildRemoveScreen(diceResult, channelEmoji, `No more ${LABELS[type]} dice to remove`));
+			await interaction.update(await buildRemoveScreen(diceResult, channelEmoji, `No more ${LABELS[type]} dice to remove`));
 			return;
 		}
 		const randomIndex = dice(diceResult.roll[type].length) - 1;
@@ -335,7 +336,7 @@ const onComponent = async ({ interaction, client }) => {
 		diceResult.roll[type].splice(randomIndex, 1);
 		writeData(client, messageRef, 'diceResult', diceResult.roll);
 		//the menu is ephemeral - close it privately and announce the removal publicly
-		await interaction.editReply({ content: '', embeds: [textEmbed('Removed!')], components: [] });
+		await interaction.update({ content: '', embeds: [textEmbed('Removed!')], components: [] });
 		await interaction.followUp({ embeds: [await statusEmbed(diceResult, channelEmoji, `Removed 1 ${dieFaceLabel(type, removedFace, channelEmoji)}`)] });
 		await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
 		return;
@@ -345,14 +346,14 @@ const onComponent = async ({ interaction, client }) => {
 		const [type, indexStr] = action.slice('selectDie-'.length).split('-');
 		const index = +indexStr;
 		if (!diceResult.roll[type] || diceResult.roll[type][index] === undefined) {
-			await safeEditReply(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to reroll`, iconsOk));
+			await safeUpdate(interaction, (iconsOk) => buildSelectScreen(diceResult, channelEmoji, `There is no ${LABELS[type]} #${index + 1} to reroll`, iconsOk));
 			return;
 		}
 		const newFace = rollOneDie(type);
 		diceResult.roll[type][index] = newFace;
 		writeData(client, messageRef, 'diceResult', diceResult.roll);
 		//the menu is ephemeral - close it privately and announce the reroll publicly
-		await interaction.editReply({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
+		await interaction.update({ content: '', embeds: [textEmbed('Rerolled!')], components: [] });
 		await interaction.followUp({ embeds: [await statusEmbed(diceResult, channelEmoji, `Rerolled ${dieFaceLabel(type, newFace, channelEmoji)} #${index + 1}`)] });
 		await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
 	}

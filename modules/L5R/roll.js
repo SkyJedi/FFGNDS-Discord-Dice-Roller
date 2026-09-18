@@ -171,7 +171,11 @@ async function buildResultText(diceResult, channelEmoji) {
 		response += emoji('explosiveSuccess', channelEmoji) + '(';
 		await asyncForEach(Object.keys(results.explosiveSuccess), color => {
 			if (results.explosiveSuccess[color] > 0) {
-				response += `${emoji(`${color === 'white' ? 'whiteHex' : color}`, channelEmoji)} ${results.explosiveSuccess[color]} `;
+				//the white/Skill die's hex-shaped pip icon is the same generic shape used for
+				//SWRPG/Genesys's hex dice buttons, so it lives in the shared buttonEmoji set
+				//instead of L5R's own (see /Emoji's buttonemoji-whitehex)
+				const icon = color === 'white' ? emoji('whiteHex', 'buttonEmoji') : emoji(color, channelEmoji);
+				response += `${icon} ${results.explosiveSuccess[color]} `;
 			}
 		});
 		response += ') ';
@@ -354,41 +358,61 @@ const LABELS = {
 //interaction.member is absent in DMs, so fall back to the username there
 const displayName = (interaction) => interaction.member?.displayName || interaction.user.username;
 
-const emptyState = () => ({ counts: {} });
+const emptyState = (channelEmoji) => ({ counts: {}, channelEmoji });
 
-//Pending pool state (counts per die/symbol) rides along in every button's customId rather than in
-//memory or Firestore, since this bot runs across multiple shard processes and a button click can't
-//rely on state left over from an earlier interaction - see SW.GENESYS/roll.js for the same pattern.
+//Pending pool state (counts per die/symbol + the channel's system, for icon lookups) rides along
+//in every button's customId rather than in memory or Firestore, since this bot runs across
+//multiple shard processes and a button click can't rely on state left over from an earlier
+//interaction - see SW.GENESYS/roll.js for the same pattern, including why channelEmoji is carried
+//here instead of re-read from Firestore on every click (it's fetched once, when /roll opens the
+//menu - see rollMenu() below).
 const MAX_COUNT = 9;
 
-const encodeState = (state) => ALL_TYPES.map(type => state.counts[type] || 0).join(',');
+const encodeState = (state) => `${ALL_TYPES.map(type => state.counts[type] || 0).join(',')}|${state.channelEmoji || ''}`;
 
 const decodeState = (str) => {
+	const [countsPart, channelEmoji] = (str || '').split('|');
 	const counts = {};
-	(str || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
-	return { counts };
+	(countsPart || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
+	return { counts, channelEmoji: channelEmoji || undefined };
 };
 
 const buildDiceOrder = (counts) => ALL_TYPES.reduce((diceOrder, type) => diceOrder.concat(Array(counts[type] || 0).fill(type)), []);
 
-//L5R has no dedicated button-icon emoji set (modules/build.js's "buttons" list is SWRPG/Genesys-only),
-//so pool buttons use text labels instead of icons
-const buildPoolSummary = (state) => {
-	const parts = ALL_TYPES.filter(type => state.counts[type] > 0).map(type => `${state.counts[type]} ${LABELS[type]}`);
-	return parts.length ? `Pool: ${parts.join(', ')}` : 'Pool: empty';
+//pool buttons are keyed by their type name directly (white/black/success/opportunity/strife/
+//explosiveSuccess), same as L5R's per-die-face emoji in modules/L5R/reroll.js's dieFaceIcon -
+//emoji() returns '' when modules/emoji.js has no application emoji cached under that name, so
+//only accept a properly resolved <a?:name:id> reference, otherwise fall back to a text label
+const CUSTOM_EMOJI_PATTERN = /^<a?:\w+:\d+>$/;
+const poolIcon = (type, iconsOk, channelEmoji) => {
+	if (!iconsOk) return null;
+	const icon = emoji(type, channelEmoji);
+	return CUSTOM_EMOJI_PATTERN.test(icon || '') ? icon : null;
 };
 
-const poolButton = (type, s) => new ButtonBuilder().setCustomId(`l5rroll:add-${type}:${s}`).setLabel(LABELS[type]).setStyle(ButtonStyle.Secondary);
+const buildPoolSummary = (state, iconsOk, channelEmoji) => {
+	const parts = ALL_TYPES.filter(type => state.counts[type] > 0).map(type => {
+		const icon = poolIcon(type, iconsOk, channelEmoji);
+		return icon ? `${state.counts[type]}${icon}` : `${state.counts[type]} ${LABELS[type]}`;
+	});
+	return parts.length ? `Pool: ${parts.join(' ')}` : 'Pool: empty';
+};
+
+const poolButton = (type, s, iconsOk, channelEmoji) => {
+	const button = new ButtonBuilder().setCustomId(`l5rroll:add-${type}:${s}`).setStyle(ButtonStyle.Secondary);
+	const icon = poolIcon(type, iconsOk, channelEmoji);
+	return icon ? button.setEmoji(icon) : button.setLabel(LABELS[type]);
+};
 
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
-const buildMainScreen = (state) => {
+const buildMainScreen = (state, iconsOk = true, channelEmoji) => {
 	const s = encodeState(state);
 	return {
 		content: '',
-		embeds: [textEmbed(buildPoolSummary(state))],
+		embeds: [textEmbed(buildPoolSummary(state, iconsOk, channelEmoji))],
 		components: [
-			new ActionRowBuilder().addComponents(DIE_TYPES.map(type => poolButton(type, s))),
+			new ActionRowBuilder().addComponents(DIE_TYPES.map(type => poolButton(type, s, iconsOk, channelEmoji))),
 			new ActionRowBuilder().addComponents(
 				new ButtonBuilder().setCustomId(`l5rroll:symbols:${s}`).setLabel('Symbols').setStyle(ButtonStyle.Secondary),
 				new ButtonBuilder().setCustomId(`l5rroll:add:${s}`).setLabel('Add to Previous').setStyle(ButtonStyle.Primary)
@@ -401,18 +425,65 @@ const buildMainScreen = (state) => {
 	};
 };
 
-const buildSymbolsScreen = (state) => {
+const buildSymbolsScreen = (state, iconsOk = true, channelEmoji) => {
 	const s = encodeState(state);
 	return {
 		content: '',
-		embeds: [textEmbed(buildPoolSummary(state))],
+		embeds: [textEmbed(buildPoolSummary(state, iconsOk, channelEmoji))],
 		components: [
-			new ActionRowBuilder().addComponents(SYMBOL_TYPES.map(type => poolButton(type, s))),
+			new ActionRowBuilder().addComponents(SYMBOL_TYPES.map(type => poolButton(type, s, iconsOk, channelEmoji))),
 			new ActionRowBuilder().addComponents(
 				new ButtonBuilder().setCustomId(`l5rroll:main:${s}`).setLabel('Back').setStyle(ButtonStyle.Secondary)
 			)
 		]
 	};
+};
+
+//Discord validates emoji ids at request time, so a stale/deleted application emoji id (e.g. one
+//deleted and re-uploaded under the same NeoEmoji name since this shard's cache was last loaded -
+//see modules/emoji.js's loadEmojis()) only surfaces as a "COMPONENT_INVALID_EMOJI" rejection when
+//the message is actually sent - our own format check in poolIcon() can't catch that in advance.
+//Retry once with icons disabled so the click still succeeds instead of crashing the interaction -
+//same pattern as SW.GENESYS/roll.js's safeEditReply and this file's own reroll.js.
+const hasInvalidEmojiError = (error) => /INVALID_EMOJI/i.test(JSON.stringify(error?.rawError ?? error?.message ?? ''));
+let iconsKnownBad = false;
+
+//used for the /roll slash command entry point, whose interaction is already deferred by
+//handlers.js before it ever reaches this module - editReply() is the only valid way to complete it
+const safeEditReply = async (interaction, buildScreen) => {
+	if (iconsKnownBad) {
+		await interaction.editReply(buildScreen(false));
+		return;
+	}
+	try {
+		await interaction.editReply(buildScreen(true));
+	} catch (error) {
+		if (!hasInvalidEmojiError(error)) throw error;
+		iconsKnownBad = true;
+		console.error('L5R roll builder: the application emoji cache has a stale/invalid emoji id, falling back to text labels for the rest of this run - run /build (or restart) to refresh it', error);
+		await interaction.editReply(buildScreen(false));
+	}
+};
+
+//used for button clicks (onComponent below), whose interaction arrives unacknowledged. Every
+//pool-builder screen here builds synchronously (or, for 'roll'/'add', after only a quick Firestore
+//read), so a single interaction.update() both acknowledges the click and edits the message in one
+//Discord API round trip, instead of the slower deferUpdate()+editReply() pair - see
+//modules/SW.GENESYS/roll.js's safeUpdate for the fuller explanation.
+const safeUpdate = async (interaction, buildScreen) => {
+	if (iconsKnownBad) {
+		await interaction.update(buildScreen(false));
+		return;
+	}
+	try {
+		await interaction.update(buildScreen(true));
+	} catch (error) {
+		if (!hasInvalidEmojiError(error)) throw error;
+		iconsKnownBad = true;
+		console.error('L5R roll builder: the application emoji cache has a stale/invalid emoji id, falling back to text labels for the rest of this run - run /build (or restart) to refresh it', error);
+		await interaction.deferUpdate();
+		await interaction.editReply(buildScreen(false));
+	}
 };
 
 //builds the embed shown for a rolled result - faces go in the description, with the
@@ -425,8 +496,8 @@ const buildRollResultEmbed = (rollLine, faces, resultsLine) => {
 
 //Slash command entry point for /roll (L5R channels) - opens the button-driven pool builder instead
 //of reading the legacy "input" option (only /add still reads it - see roll() above).
-const rollMenu = async ({ interaction }) => {
-	await interaction.editReply(buildMainScreen(emptyState()));
+const rollMenu = async ({ interaction, channelEmoji }) => {
+	await safeEditReply(interaction, (iconsOk) => buildMainScreen(emptyState(channelEmoji), iconsOk, channelEmoji));
 };
 
 //Slash command entry point for /oldroll (L5R channels) - the pre-button-UI free-text dice code
@@ -463,39 +534,42 @@ const onComponent = async ({ interaction, client }) => {
 	const parts = interaction.customId.split(':');
 	const action = parts[1];
 	const state = decodeState(parts[2]);
+	//carried in the encoded state (see encodeState/decodeState above) rather than re-read from
+	//Firestore on every click - it was fetched once, when /roll first opened this menu
+	const channelEmoji = state.channelEmoji;
 
-	await interaction.deferUpdate();
 	const messageRef = asMessageRef(interaction);
 
 	if (action.startsWith('add-')) {
 		const type = action.slice(4);
 		state.counts[type] = Math.min((state.counts[type] || 0) + 1, MAX_COUNT);
-		await interaction.editReply(SYMBOL_TYPES.includes(type) ? buildSymbolsScreen(state) : buildMainScreen(state));
+		await safeUpdate(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildSymbolsScreen(state, iconsOk, channelEmoji) : buildMainScreen(state, iconsOk, channelEmoji));
 		return;
 	}
 
 	switch (action) {
 		case 'symbols':
-			await interaction.editReply(buildSymbolsScreen(state));
+			await safeUpdate(interaction, (iconsOk) => buildSymbolsScreen(state, iconsOk, channelEmoji));
 			break;
 		case 'main':
-			await interaction.editReply(buildMainScreen(state));
+			await safeUpdate(interaction, (iconsOk) => buildMainScreen(state, iconsOk, channelEmoji));
 			break;
 		case 'clear':
 			state.counts = {};
-			await interaction.editReply(buildMainScreen(state));
+			await safeUpdate(interaction, (iconsOk) => buildMainScreen(state, iconsOk, channelEmoji));
 			break;
 		case 'roll':
 		case 'add': {
 			const diceOrder = buildDiceOrder(state.counts);
 			if (!diceOrder.length) {
-				const screen = buildMainScreen(state);
-				screen.embeds = [textEmbed(`No dice in the pool - add some first.\n\n${buildPoolSummary(state)}`)];
-				await interaction.editReply(screen);
+				await safeUpdate(interaction, (iconsOk) => {
+					const screen = buildMainScreen(state, iconsOk, channelEmoji);
+					screen.embeds = [textEmbed(`No dice in the pool - add some first.\n\n${buildPoolSummary(state, iconsOk, channelEmoji)}`)];
+					return screen;
+				});
 				break;
 			}
 
-			const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
 			let diceResult;
 			if (action === 'add') {
 				const previous = await readData(client, messageRef, 'diceResult');
@@ -504,7 +578,7 @@ const onComponent = async ({ interaction, client }) => {
 
 			const result = await rollCore({ diceOrder, diceResult, channelEmoji });
 			if (result.error) {
-				await interaction.editReply({ content: '', embeds: [textEmbed(result.error)], components: [] });
+				await interaction.update({ content: '', embeds: [textEmbed(result.error)], components: [] });
 				break;
 			}
 
@@ -515,7 +589,8 @@ const onComponent = async ({ interaction, client }) => {
 			//be edited back to another ephemeral message - the actual result has to go out as a
 			//fresh, public followUp() instead. Clear its buttons immediately so a click during the
 			//reveal below can't trigger a second roll, then delete it once the public post is up.
-			await interaction.editReply({ content: '', embeds: [textEmbed('Rolled!')], components: [] });
+			//update() (not deferUpdate()+editReply()) since this first response needs no async prep.
+			await interaction.update({ content: '', embeds: [textEmbed('Rolled!')], components: [] });
 
 			//show the animated gif faces first, then swap to the static faces once they've had a
 			//moment to play - matches /roll's SWRPG/Genesys two-stage editReply.

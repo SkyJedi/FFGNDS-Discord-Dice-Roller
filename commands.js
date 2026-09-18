@@ -82,8 +82,9 @@ const commands = [
     ),
 
     // Admin only
-    new SlashCommandBuilder().setName('restart').setDescription('Restarts all shards.').setDefaultMemberPermissions(0),
-    new SlashCommandBuilder().setName('build').setDescription('Rebuilds the emoji cache from the configured guilds.').setDefaultMemberPermissions(0)
+    // Restarting also happens to pick up any newly uploaded/renamed application emoji, since
+    // modules/emoji.js's cache is only fetched once per shard at startup (see its loadEmojis()).
+    new SlashCommandBuilder().setName('restart').setDescription('Restarts all shards.').setDefaultMemberPermissions(0)
 ].map(command => command.toJSON());
 
 module.exports = commands;

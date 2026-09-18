@@ -8,7 +8,7 @@ const {
 //the roll pool builder reuses /roll's dice/symbol buttons and icon-fallback behavior instead of
 //duplicating it - see modules/SW.GENESYS/roll.js
 const swRoll = require('./roll');
-const { DIE_TYPES, SYMBOL_TYPES, ALL_TYPES, LABELS, MAX_COUNT, poolIcon, safeEditReply } = swRoll;
+const { DIE_TYPES, SYMBOL_TYPES, ALL_TYPES, LABELS, MAX_COUNT, poolIcon, safeUpdate } = swRoll;
 
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
@@ -149,28 +149,35 @@ const initiative = async ({ interaction, client }) => {
 
 //NPC/PC is required (rather than optional, like a die color) because every slot needs a type to
 //sort and display - the two toggle buttons in buildPoolMainScreen() double as that selection.
-const emptyPoolState = () => ({ counts: {}, type: '' });
+const emptyPoolState = (channelEmoji) => ({ counts: {}, type: '', channelEmoji });
 
-const encodePoolState = (state) => `${ALL_TYPES.map(type => state.counts[type] || 0).join(',')}|${state.type || ''}`;
+//single-character codes keep the channel's system (needed for icon lookups) from growing the
+//customId much - see modules/SW.GENESYS/roll.js's encodeState for the same scheme and why it's
+//carried in state at all: it's fetched once, when the "Roll" button first opens this pool
+//(see onComponent's 'roll' case below), instead of re-reading it from Firestore on every click
+const CHANNEL_CODES = { swrpg: 's', genesys: 'g', l5r: 'l' };
+const CHANNEL_CODES_REVERSE = { s: 'swrpg', g: 'genesys', l: 'l5r' };
+
+const encodePoolState = (state) => `${ALL_TYPES.map(type => state.counts[type] || 0).join(',')}|${state.type || ''}|${CHANNEL_CODES[state.channelEmoji] || ''}`;
 
 const decodePoolState = (str) => {
-    const [countsPart, type] = (str || '').split('|');
+    const [countsPart, type, channelCode] = (str || '').split('|');
     const counts = {};
     (countsPart || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
-    return { counts, type: type === 'npc' || type === 'pc' ? type : '' };
+    return { counts, type: type === 'npc' || type === 'pc' ? type : '', channelEmoji: CHANNEL_CODES_REVERSE[channelCode] };
 };
 
 const buildPoolDiceOrder = (counts) => ALL_TYPES.reduce((diceOrder, type) => diceOrder.concat(Array(counts[type] || 0).fill(type)), []);
 
-const poolButton = (type, s, iconsOk) => {
+const poolButton = (type, s, iconsOk, channelEmoji) => {
     const button = new ButtonBuilder().setCustomId(`init:poolAdd-${type}:${s}`).setStyle(ButtonStyle.Secondary);
-    const icon = poolIcon(type, iconsOk);
+    const icon = poolIcon(type, iconsOk, channelEmoji);
     return icon ? button.setEmoji(icon) : button.setLabel(LABELS[type]);
 };
 
-const buildPoolSummary = (state, iconsOk) => {
+const buildPoolSummary = (state, iconsOk, channelEmoji) => {
     const parts = ALL_TYPES.filter(type => state.counts[type] > 0).map(type => {
-        const icon = poolIcon(type, iconsOk);
+        const icon = poolIcon(type, iconsOk, channelEmoji);
         return icon ? `${state.counts[type]}${icon}` : `${state.counts[type]} ${LABELS[type]}`;
     });
     const pool = parts.length ? `Pool: ${parts.join(' ')}` : 'Pool: empty';
@@ -178,18 +185,18 @@ const buildPoolSummary = (state, iconsOk) => {
     return `Type: ${type}\n${pool}`;
 };
 
-const buildPoolMainScreen = (state, iconsOk = true) => {
+const buildPoolMainScreen = (state, iconsOk = true, channelEmoji) => {
     const s = encodePoolState(state);
     return {
         content: '',
-        embeds: [textEmbed(buildPoolSummary(state, iconsOk))],
+        embeds: [textEmbed(buildPoolSummary(state, iconsOk, channelEmoji))],
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`init:poolType-npc:${s}`).setLabel('NPC').setStyle(state.type === 'npc' ? ButtonStyle.Success : ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId(`init:poolType-pc:${s}`).setLabel('PC').setStyle(state.type === 'pc' ? ButtonStyle.Success : ButtonStyle.Secondary)
             ),
-            new ActionRowBuilder().addComponents(DIE_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk))),
-            new ActionRowBuilder().addComponents(DIE_TYPES.slice(5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(DIE_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
+            new ActionRowBuilder().addComponents(DIE_TYPES.slice(5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`init:poolSymbols:${s}`).setLabel('Symbols').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId(`init:poolRoll:${s}`).setLabel('Roll').setStyle(ButtonStyle.Primary),
@@ -199,14 +206,14 @@ const buildPoolMainScreen = (state, iconsOk = true) => {
     };
 };
 
-const buildPoolSymbolsScreen = (state, iconsOk = true) => {
+const buildPoolSymbolsScreen = (state, iconsOk = true, channelEmoji) => {
     const s = encodePoolState(state);
     return {
         content: '',
-        embeds: [textEmbed(buildPoolSummary(state, iconsOk))],
+        embeds: [textEmbed(buildPoolSummary(state, iconsOk, channelEmoji))],
         components: [
-            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk))),
-            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(5).map(type => poolButton(type, s, iconsOk))),
+            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(0, 5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
+            new ActionRowBuilder().addComponents(SYMBOL_TYPES.slice(5).map(type => poolButton(type, s, iconsOk, channelEmoji))),
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`init:poolMain:${s}`).setLabel('Back').setStyle(ButtonStyle.Secondary)
             )
@@ -217,11 +224,12 @@ const buildPoolSymbolsScreen = (state, iconsOk = true) => {
 const rollInitiativePool = async ({ interaction, client, state }) => {
     const messageRef = asMessageRef(interaction);
     const initiativeOrder = await readInitiativeOrder(client, messageRef);
+    const channelEmoji = state.channelEmoji;
 
     if (!state.type) {
-        await safeEditReply(interaction, (iconsOk) => {
-            const screen = buildPoolMainScreen(state, iconsOk);
-            screen.embeds = [textEmbed(`Select NPC or PC before rolling.\n\n${buildPoolSummary(state, iconsOk)}`)];
+        await safeUpdate(interaction, (iconsOk) => {
+            const screen = buildPoolMainScreen(state, iconsOk, channelEmoji);
+            screen.embeds = [textEmbed(`Select NPC or PC before rolling.\n\n${buildPoolSummary(state, iconsOk, channelEmoji)}`)];
             return screen;
         });
         return;
@@ -229,18 +237,17 @@ const rollInitiativePool = async ({ interaction, client, state }) => {
 
     const diceOrder = buildPoolDiceOrder(state.counts);
     if (!diceOrder.length) {
-        await safeEditReply(interaction, (iconsOk) => {
-            const screen = buildPoolMainScreen(state, iconsOk);
-            screen.embeds = [textEmbed(`No dice in the pool - add some first.\n\n${buildPoolSummary(state, iconsOk)}`)];
+        await safeUpdate(interaction, (iconsOk) => {
+            const screen = buildPoolMainScreen(state, iconsOk, channelEmoji);
+            screen.embeds = [textEmbed(`No dice in the pool - add some first.\n\n${buildPoolSummary(state, iconsOk, channelEmoji)}`)];
             return screen;
         });
         return;
     }
 
-    const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
     const rolled = swRoll.rollCore({ diceOrder, channelEmoji });
     if (rolled.error) {
-        await interaction.editReply({ content: '', embeds: [textEmbed(rolled.error)], components: [] });
+        await interaction.update({ content: '', embeds: [textEmbed(rolled.error)], components: [] });
         return;
     }
     writeData(client, messageRef, 'diceResult', rolled.diceResult.roll);
@@ -258,7 +265,7 @@ const rollInitiativePool = async ({ interaction, client, state }) => {
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder, true);
     //keep the private control panel ready for the next click, and announce the roll publicly
-    await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.update(buildMenu(initiativeOrder));
     await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
 };
 
@@ -277,27 +284,28 @@ const buildOrderModal = (customId, title) => {
 const showSetModal = (interaction) => interaction.showModal(buildOrderModal('init:setModal', 'Set Initiative Order'));
 const showModifyModal = (interaction) => interaction.showModal(buildOrderModal('init:modifyModal', 'Modify Initiative Order'));
 
+//these modals are only ever shown from a button (see showSetModal/showModifyModal below), so the
+//submission can use update() to edit that same original message in one round trip, same as a
+//plain button click - see modules/SW.GENESYS/roll.js's safeUpdate for the general pattern
 const submitSetModal = async ({ interaction, client }) => {
-    await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
     const order = interaction.fields.getTextInputValue('order').toLowerCase().trim();
 
     const initiativeOrder = initializeInitOrder();
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.update(buildMenu(initiativeOrder));
     await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, `${displayName(interaction)} sets the initiative order`)] });
 };
 
 const submitModifyModal = async ({ interaction, client }) => {
-    await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
     const initiativeOrder = await readInitiativeOrder(client, messageRef);
     const order = interaction.fields.getTextInputValue('order').toLowerCase().trim();
 
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.update(buildMenu(initiativeOrder));
     await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, `${displayName(interaction)} modifies the initiative order`)] });
 };
 
@@ -323,59 +331,58 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     //---- roll pool builder ----
+    //only this entry point needs a Firestore read for channelEmoji - it's then carried in the
+    //encoded state (see encodePoolState/decodePoolState above) for every click after this one.
+    //The read happens before the single interaction.update() call below (inside safeUpdate) rather
+    //than deferUpdate()+editReply(), since it easily finishes well within Discord's response window.
     if (action === 'roll') {
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => buildPoolMainScreen(emptyPoolState(), iconsOk));
+        const channelEmoji = await readData(client, asMessageRef(interaction), 'channelEmoji').catch(() => null);
+        await safeUpdate(interaction, (iconsOk) => buildPoolMainScreen(emptyPoolState(channelEmoji), iconsOk, channelEmoji));
         return;
     }
     if (action.startsWith('poolAdd-')) {
         const state = decodePoolState(parts[2]);
         const type = action.slice('poolAdd-'.length);
         state.counts[type] = Math.min((state.counts[type] || 0) + 1, MAX_COUNT);
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildPoolSymbolsScreen(state, iconsOk) : buildPoolMainScreen(state, iconsOk));
+        await safeUpdate(interaction, (iconsOk) => SYMBOL_TYPES.includes(type) ? buildPoolSymbolsScreen(state, iconsOk, state.channelEmoji) : buildPoolMainScreen(state, iconsOk, state.channelEmoji));
         return;
     }
     if (action === 'poolSymbols') {
         const state = decodePoolState(parts[2]);
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => buildPoolSymbolsScreen(state, iconsOk));
+        await safeUpdate(interaction, (iconsOk) => buildPoolSymbolsScreen(state, iconsOk, state.channelEmoji));
         return;
     }
     if (action === 'poolMain') {
         const state = decodePoolState(parts[2]);
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => buildPoolMainScreen(state, iconsOk));
+        await safeUpdate(interaction, (iconsOk) => buildPoolMainScreen(state, iconsOk, state.channelEmoji));
         return;
     }
     if (action === 'poolType-npc' || action === 'poolType-pc') {
         const state = decodePoolState(parts[2]);
         state.type = action === 'poolType-npc' ? 'npc' : 'pc';
-        await interaction.deferUpdate();
-        await safeEditReply(interaction, (iconsOk) => buildPoolMainScreen(state, iconsOk));
+        await safeUpdate(interaction, (iconsOk) => buildPoolMainScreen(state, iconsOk, state.channelEmoji));
         return;
     }
     if (action === 'poolCancel') {
-        await interaction.deferUpdate();
         const messageRef = asMessageRef(interaction);
         const initiativeOrder = await readInitiativeOrder(client, messageRef);
-        await interaction.editReply(buildMenu(initiativeOrder));
+        await interaction.update(buildMenu(initiativeOrder));
         return;
     }
     if (action === 'poolRoll') {
         const state = decodePoolState(parts[2]);
-        await interaction.deferUpdate();
         await rollInitiativePool({ interaction, client, state });
         return;
     }
 
-    await interaction.deferUpdate();
+    //readInitiativeOrder is a Firestore read, not a Discord call, so it still finishes well within
+    //Discord's response window before the single interaction.update() call each branch ends with
     const messageRef = asMessageRef(interaction);
     let initiativeOrder = await readInitiativeOrder(client, messageRef);
 
     //Done just closes the menu and shows the current order with no further buttons
     if (action === 'done') {
-        await interaction.editReply({ content: '', embeds: [textEmbed(buildStatusText(initiativeOrder))], components: [] });
+        await interaction.update({ content: '', embeds: [textEmbed(buildStatusText(initiativeOrder))], components: [] });
         return;
     }
 
@@ -413,13 +420,13 @@ const onComponent = async ({ interaction, client }) => {
 
     //a no-op (already at the starting turn) stays private - nothing actually happened
     if (!changed) {
-        await interaction.editReply(buildMenu(initiativeOrder, note));
+        await interaction.update(buildMenu(initiativeOrder, note));
         return;
     }
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
     //keep the private control panel ready for the next click, and announce the change publicly
-    await interaction.editReply(buildMenu(initiativeOrder));
+    await interaction.update(buildMenu(initiativeOrder));
     await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
 };
 

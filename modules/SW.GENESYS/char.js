@@ -119,23 +119,25 @@ const buildAddModal = () => {
 //the deferUpdate()+editReply() flow the rest of the component router uses
 const showAddModal = (interaction) => interaction.showModal(buildAddModal());
 
+//this modal (and every other submitXModal below) is only ever shown from a button (see
+//showAddModal above), so the submission can use update() to edit that same message in one round
+//trip instead of deferUpdate()+editReply() - see modules/SW.GENESYS/roll.js's safeUpdate
 const submitAddModal = async ({ interaction, client }) => {
-    await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
 
     const name = interaction.fields.getTextInputValue('name').trim().toUpperCase();
     if (!name) {
-        await interaction.editReply({ content: '', embeds: [textEmbed('A name is required.')], components: [backAndDoneRow()] });
+        await interaction.update({ content: '', embeds: [textEmbed('A name is required.')], components: [backAndDoneRow()] });
         return;
     }
     if (name.includes(':')) {
-        await interaction.editReply({ content: '', embeds: [textEmbed('Character names cannot contain ":".')], components: [backAndDoneRow()] });
+        await interaction.update({ content: '', embeds: [textEmbed('Character names cannot contain ":".')], components: [backAndDoneRow()] });
         return;
     }
 
     const characterStatus = await readCharacters(client, messageRef);
     if (characterStatus[name]) {
-        await interaction.editReply({ content: '', embeds: [textEmbed(`${name} already exists!`)], components: [backAndDoneRow(name)] });
+        await interaction.update({ content: '', embeds: [textEmbed(`${name} already exists!`)], components: [backAndDoneRow(name)] });
         return;
     }
 
@@ -154,7 +156,7 @@ const submitAddModal = async ({ interaction, client }) => {
     characterStatus[name] = character;
     writeCharacters(client, messageRef, characterStatus);
 
-    await interaction.editReply({ content: '', embeds: [textEmbed(buildCharacterStatus(name, character))], components: [backAndDoneRow(name)] });
+    await interaction.update({ content: '', embeds: [textEmbed(buildCharacterStatus(name, character))], components: [backAndDoneRow(name)] });
     await announce(interaction, `${displayName(interaction)} adds a new character:\n\n${buildCharacterStatus(name, character)}`);
 };
 
@@ -217,22 +219,21 @@ const addCrit = (client, messageRef, characterStatus, name, number) => {
 };
 
 const submitCritModal = async ({ interaction, client, name, wDelta, sDelta }) => {
-    await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
     const characterStatus = await readCharacters(client, messageRef).catch(() => ({}));
 
     const number = toInt(interaction.fields.getTextInputValue('number'));
     if (number <= 0) {
-        await interaction.editReply({ content: '', embeds: [textEmbed('Enter a valid critical injury number.')], components: [backAndDoneRow(name)] });
+        await interaction.update({ content: '', embeds: [textEmbed('Enter a valid critical injury number.')], components: [backAndDoneRow(name)] });
         return;
     }
 
     const target = addCrit(client, messageRef, characterStatus, name, number);
     if (!target) {
-        await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+        await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
         return;
     }
-    await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta));
+    await interaction.update(buildModifyScreen(name, target, wDelta, sDelta));
     await announce(interaction, `${displayName(interaction)} adds ${critName(number)} (${number}) to ${name}`);
 };
 
@@ -291,26 +292,25 @@ const buildCreditsModal = (name, wDelta, sDelta) => {
 const showCreditsModal = (interaction, name, wDelta, sDelta) => interaction.showModal(buildCreditsModal(name, wDelta, sDelta));
 
 const submitCreditsModal = async ({ interaction, client, name, wDelta, sDelta }) => {
-    await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
     const characterStatus = await readCharacters(client, messageRef).catch(() => ({}));
 
     const amount = toInt(interaction.fields.getTextInputValue('amount'));
     if (!amount) {
-        await interaction.editReply({ content: '', embeds: [textEmbed('Enter a non-zero amount.')], components: [backAndDoneRow(name)] });
+        await interaction.update({ content: '', embeds: [textEmbed('Enter a non-zero amount.')], components: [backAndDoneRow(name)] });
         return;
     }
 
     const target = characterStatus[name];
     if (!target) {
-        await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+        await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
         return;
     }
     target.credits = Math.max(0, +target.credits + amount);
     characterStatus[name] = target;
     writeCharacters(client, messageRef, characterStatus);
 
-    await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta, `Credits ${amount >= 0 ? '+' : ''}${amount} → ${target.credits}`));
+    await interaction.update(buildModifyScreen(name, target, wDelta, sDelta, `Credits ${amount >= 0 ? '+' : ''}${amount} → ${target.credits}`));
     await announce(interaction, `${displayName(interaction)} changes ${name}'s credits by ${amount >= 0 ? '+' : ''}${amount} (now ${target.credits})`);
 };
 
@@ -361,7 +361,6 @@ const buildTrackAddModal = (type, name, wDelta, sDelta) => {
 const showTrackAddModal = (interaction, type, name, wDelta, sDelta) => interaction.showModal(buildTrackAddModal(type, name, wDelta, sDelta));
 
 const submitTrackAddModal = async ({ interaction, client, type, name, wDelta, sDelta }) => {
-    await interaction.deferUpdate();
     const messageRef = asMessageRef(interaction);
     const characterStatus = await readCharacters(client, messageRef).catch(() => ({}));
 
@@ -369,17 +368,17 @@ const submitTrackAddModal = async ({ interaction, client, type, name, wDelta, sD
     const amount = toInt(interaction.fields.getTextInputValue('amount'));
 
     if (!label) {
-        await interaction.editReply({ content: '', embeds: [textEmbed('Enter a name for this entry.')], components: [backAndDoneRow(name)] });
+        await interaction.update({ content: '', embeds: [textEmbed('Enter a name for this entry.')], components: [backAndDoneRow(name)] });
         return;
     }
     if (!amount) {
-        await interaction.editReply({ content: '', embeds: [textEmbed('Enter a non-zero amount.')], components: [backAndDoneRow(name)] });
+        await interaction.update({ content: '', embeds: [textEmbed('Enter a non-zero amount.')], components: [backAndDoneRow(name)] });
         return;
     }
 
     const target = characterStatus[name];
     if (!target) {
-        await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+        await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
         return;
     }
     if (!target[type]) target[type] = {};
@@ -387,7 +386,7 @@ const submitTrackAddModal = async ({ interaction, client, type, name, wDelta, sD
     characterStatus[name] = target;
     writeCharacters(client, messageRef, characterStatus);
 
-    await interaction.editReply(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
+    await interaction.update(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
     await announce(interaction, `${displayName(interaction)} adds ${upperFirst(type)} "${label}: ${amount}" to ${name}`);
 };
 
@@ -506,61 +505,63 @@ const onComponent = async ({ interaction, client }) => {
         return;
     }
 
-    await interaction.deferUpdate();
+    //readCharacters is a Firestore read, not a Discord call, so it still finishes well within
+    //Discord's response window before the single interaction.update() call each branch ends with -
+    //see modules/SW.GENESYS/roll.js's safeUpdate for the general pattern
     const messageRef = asMessageRef(interaction);
     const characterStatus = await readCharacters(client, messageRef).catch(() => ({}));
 
     switch (action) {
         case 'back':
-            await interaction.editReply(buildMenu());
+            await interaction.update(buildMenu());
             break;
 
         case 'remove':
-            await interaction.editReply(buildRemoveList(characterStatus));
+            await interaction.update(buildRemoveList(characterStatus));
             break;
         case 'removeAsk':
-            await interaction.editReply(buildConfirmRemove(parts[2]));
+            await interaction.update(buildConfirmRemove(parts[2]));
             break;
         case 'removeConfirm': {
             const name = parts[2];
             delete characterStatus[name];
             writeCharacters(client, messageRef, characterStatus);
-            await interaction.editReply({ content: '', embeds: [textEmbed(`${name} has been removed.`)], components: [backAndDoneRow()] });
+            await interaction.update({ content: '', embeds: [textEmbed(`${name} has been removed.`)], components: [backAndDoneRow()] });
             await announce(interaction, `${displayName(interaction)} removes character ${name}`);
             break;
         }
 
         case 'modify':
-            await interaction.editReply(buildModifyList(characterStatus));
+            await interaction.update(buildModifyList(characterStatus));
             break;
         case 'mod': {
             const [name, wDelta, sDelta] = [parts[2], +parts[3], +parts[4]];
             const target = characterStatus[name];
             if (!target) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta));
+            await interaction.update(buildModifyScreen(name, target, wDelta, sDelta));
             break;
         }
         case 'track': {
             const [type, name, wDelta, sDelta] = [parts[2], parts[3], +parts[4], +parts[5]];
             const target = characterStatus[name];
             if (!target) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.editReply(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
+            await interaction.update(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
             break;
         }
         case 'trackRemove': {
             const [type, name, index, wDelta, sDelta] = [parts[2], parts[3], +parts[4], +parts[5], +parts[6]];
             const target = removeTrackedEntry(client, messageRef, characterStatus, name, type, index);
             if (!target) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.editReply(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
+            await interaction.update(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
             await announce(interaction, `${displayName(interaction)} removes a ${type} entry from ${name}`);
             break;
         }
@@ -568,21 +569,21 @@ const onComponent = async ({ interaction, client }) => {
             const [name, wDelta, sDelta] = [parts[2], +parts[3], +parts[4]];
             const target = characterStatus[name];
             if (!target) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.editReply(buildCritRemoveScreen(name, target, wDelta, sDelta));
+            await interaction.update(buildCritRemoveScreen(name, target, wDelta, sDelta));
             break;
         }
         case 'critRemove': {
             const [name, index, wDelta, sDelta] = [parts[2], +parts[3], +parts[4], +parts[5]];
             const { target, removed } = removeCritAt(client, messageRef, characterStatus, name, index);
             if (!target) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
             const prefix = removed !== null ? `Removed ${critName(removed)} (${removed})` : undefined;
-            await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta, prefix));
+            await interaction.update(buildModifyScreen(name, target, wDelta, sDelta, prefix));
             if (removed !== null) await announce(interaction, `${displayName(interaction)} removes ${critName(removed)} (${removed}) from ${name}`);
             break;
         }
@@ -591,10 +592,10 @@ const onComponent = async ({ interaction, client }) => {
             const roll = dice(100);
             const target = addCrit(client, messageRef, characterStatus, name, roll);
             if (!target) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.editReply(buildModifyScreen(name, target, wDelta, sDelta, `Rolled ${roll} → ${critName(roll)}`));
+            await interaction.update(buildModifyScreen(name, target, wDelta, sDelta, `Rolled ${roll} → ${critName(roll)}`));
             await announce(interaction, `${displayName(interaction)} rolls a critical injury for ${name}: ${roll} → ${critName(roll)}`);
             break;
         }
@@ -602,14 +603,14 @@ const onComponent = async ({ interaction, client }) => {
             const [name, wDelta, sDelta] = [parts[2], +parts[3], +parts[4]];
             const target = characterStatus[name];
             if (!target) {
-                await interaction.editReply({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
             applyWoundDelta(target, wDelta);
             applyStrainDelta(target, sDelta);
             characterStatus[name] = target;
             writeCharacters(client, messageRef, characterStatus);
-            await interaction.editReply({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });
+            await interaction.update({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });
             //0/0 is a harmless no-op (see buildModifyScreen's comment) - nothing changed at this
             //step, so there's nothing new to announce (any earlier credits/crit/track changes in
             //this session were already announced individually as they happened)
@@ -621,17 +622,18 @@ const onComponent = async ({ interaction, client }) => {
         }
 
         case 'list':
-            await interaction.editReply(buildList(characterStatus));
+            await interaction.update(buildList(characterStatus));
             break;
 
         case 'done': {
             const name = parts[2];
             const target = name && characterStatus[name];
             if (!target) {
+                await interaction.deferUpdate();
                 await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
                 break;
             }
-            await interaction.editReply({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });
+            await interaction.update({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });
             break;
         }
 
