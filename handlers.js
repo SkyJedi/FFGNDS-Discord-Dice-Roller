@@ -71,9 +71,9 @@ const onInteraction = async ({ interaction, client }) => {
     const messageRef = modules.asMessageRef(interaction);
 
     //get channelEmoji
-    let channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(console.error);
+    let channelEmoji = await readData(client, messageRef, 'channelEmoji').catch((error) => main.logError('onInteraction', error));
 
-    console.log(`${interaction.user.username}, ${command}, ${new Date()}`);
+    console.log(`${interaction.user.username}, ${command}`);
 
 //************************COMMANDS START HERE************************
 

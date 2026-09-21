@@ -27,8 +27,11 @@ const readData = async (client, message, dataSet) => {
 };
 
 const writeData = (client, message, dataSet, data, merge = false) => {
+    //required lazily to avoid a load-order-dependent circular require with ../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../index');
     let dbRef = getDbRef(client, message, dataSet);
-    dbRef.set({ [dataSet]: data }, { merge }).catch(console.error);
+    dbRef.set({ [dataSet]: data }, { merge }).catch((error) => main.logError('writeData', error));
 };
 
 const getDbRef = (client, message, dataSet) => {

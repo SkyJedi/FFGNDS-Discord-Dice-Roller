@@ -28,9 +28,13 @@ const client = new Client(ClientOptions);
 //   started shutting down - a normal race during a restart, not something our code triggers.
 // - 50013 (Discord): the bot lacks a permission it needs in that channel (e.g. Send Messages) -
 //   only a server admin can fix that, so there's nothing for our code to do about it either.
+// - 40060 (Discord): this interaction already got an initial response (update()/reply()/
+//   deferUpdate()) before this call ran - each button handler here only ever responds to an
+//   interaction once, so this means Discord redelivered the same interactionCreate event twice
+//   (a known, occasional gateway/reconnect quirk), not a bug in our handling of it.
 // Used here and by every module's interaction .catch()es (see roll.js, reroll.js, destiny.js,
 // char.js) that clean up an ephemeral message once they're done with it.
-const EXPECTED_ERROR_CODES = { 10062: 'Unknown interaction', 10008: 'Unknown Message', ERR_IPC_CHANNEL_CLOSED: 'IPC channel closed', 50013: 'Missing Permissions' };
+const EXPECTED_ERROR_CODES = { 10062: 'Unknown interaction', 10008: 'Unknown Message', ERR_IPC_CHANNEL_CLOSED: 'IPC channel closed', 50013: 'Missing Permissions', 40060: 'Interaction already acknowledged' };
 const logError = (context, error) => {
     const reason = EXPECTED_ERROR_CODES[error?.code];
     if (reason) {
@@ -55,14 +59,14 @@ client.login(token).catch(error => console.error(error));
 
 // Register our event handlers (defined below):
 client.on('interactionCreate', interaction => handlers.onInteraction({ interaction, client }).catch((error) => logError('onInteraction', error)));
-client.on('messageCreate', message => handlers.onLegacyMessage({ message, client }).catch(console.error));
+client.on('messageCreate', message => handlers.onLegacyMessage({ message, client }).catch((error) => logError('onLegacyMessage', error)));
 client.on('clientReady', async () => {
     const count = await emoji.loadEmojis(client).catch((error) => logError('loadEmojis', error));
     if (count !== undefined) console.log(`Loaded ${count} application emoji`);
 });
 
 client.on('threadCreate', async (thread) => {
-        if (thread.joinable) await thread.join().catch(console.error);
+        if (thread.joinable) await thread.join().catch((error) => logError('threadCreate', error));
     }
 );
 
