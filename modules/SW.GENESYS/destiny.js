@@ -57,6 +57,19 @@ const buildMenu = (destinyBalance, channelEmoji) => {
     };
 };
 
+//Roll/Light/Dark/Set/Reset/Done all remove the private ephemeral menu once they've posted the
+//public readout - deferUpdate() acknowledges the click without touching the menu message, then
+//deleteReply() removes it after followUp() has the public post out. Re-running /destiny opens a
+//fresh menu.
+const closeEphemeralMenu = async (interaction, message) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
+    await interaction.deferUpdate();
+    await interaction.followUp({ embeds: [textEmbed(message)] });
+    await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
+};
+
 //slash command entry point - handlers.js has already deferred the reply
 const destiny = async ({ client, interaction, channelEmoji }) => {
     const messageRef = asMessageRef(interaction);
@@ -80,12 +93,8 @@ const buildSetModal = () => {
 const showSetModal = (interaction) => interaction.showModal(buildSetModal());
 
 //this modal is only ever shown from a button (see showSetModal above), so the submission can use
-//update() to edit that same message in one round trip instead of deferUpdate()+editReply() -
-//see modules/SW.GENESYS/roll.js's safeUpdate for the general pattern
+//deferUpdate()/deleteReply() on that same message via closeEphemeralMenu()
 const submitSetModal = async ({ interaction, client }) => {
-    //required lazily to avoid a load-order-dependent circular require with ../../index
-    //(see modules/functions.js for the full explanation)
-    const main = require('../../index');
     const messageRef = asMessageRef(interaction);
     const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
     const names = namesFor(channelEmoji);
@@ -95,10 +104,7 @@ const submitSetModal = async ({ interaction, client }) => {
     destinyBalance.dark = toInt(interaction.fields.getTextInputValue('dark'));
     writeBalance(client, messageRef, destinyBalance);
 
-    //the menu is ephemeral (see handlers.js) - close it privately and announce the new pool publicly
-    await interaction.update({ content: '', embeds: [textEmbed('Done!')], components: [] });
-    await interaction.followUp({ embeds: [textEmbed(`${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
-    await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
+    await closeEphemeralMenu(interaction, `${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`);
 };
 
 //---------------------------------------------------------------- router
@@ -106,9 +112,6 @@ const submitSetModal = async ({ interaction, client }) => {
 //Each button press performs its action immediately and closes the menu (no components left on
 //the reply) so the result is unambiguous about who did what - re-run /destiny to act again.
 const onComponent = async ({ interaction, client }) => {
-    //required lazily to avoid a load-order-dependent circular require with ../../index
-    //(see modules/functions.js for the full explanation)
-    const main = require('../../index');
     const action = interaction.customId.split(':')[1];
 
     if (interaction.isModalSubmit()) {
@@ -122,15 +125,16 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     //readData/readBalance are Firestore reads, not Discord calls, so they still finish well within
-    //Discord's response window before the single interaction.update() call below
+    //Discord's response window before the closeEphemeralMenu() call below
     const messageRef = asMessageRef(interaction);
     const channelEmoji = await readData(client, messageRef, 'channelEmoji').catch(() => null);
     const names = namesFor(channelEmoji);
     let destinyBalance = await readBalance(client, messageRef);
 
-    //Done just closes the menu - it doesn't change the pool, so it skips the write+message flow below
+    //Done doesn't change the pool, but still posts a public readout of who wrapped up and the
+    //final pool, then removes the private menu - same as every other action below
     if (action === 'done') {
-        await interaction.update({ content: '', embeds: [textEmbed(buildPoolText(destinyBalance, channelEmoji, names))], components: [] });
+        await closeEphemeralMenu(interaction, `${displayName(interaction)} finishes with the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`);
         return;
     }
 
@@ -186,10 +190,8 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     writeBalance(client, messageRef, destinyBalance);
-    //the menu is ephemeral - close it privately and announce the change publicly
-    await interaction.update({ content: '', embeds: [textEmbed('Done!')], components: [] });
-    await interaction.followUp({ embeds: [textEmbed(`${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`)] });
-    await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
+    //announce the change publicly, then remove the private control panel
+    await closeEphemeralMenu(interaction, `${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`);
 };
 
 exports.destiny = destiny;

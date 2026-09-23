@@ -610,14 +610,15 @@ const onComponent = async ({ interaction, client }) => {
             applyStrainDelta(target, sDelta);
             characterStatus[name] = target;
             writeCharacters(client, messageRef, characterStatus);
-            await interaction.update({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });
+            await interaction.deferUpdate();
             //0/0 is a harmless no-op (see buildModifyScreen's comment) - nothing changed at this
             //step, so there's nothing new to announce (any earlier credits/crit/track changes in
-            //this session were already announced individually as they happened)
+            //this session were already announced individually as they happened), but Done still
+            //ends the session and removes the private menu either way
             if (wDelta || sDelta) {
                 await announce(interaction, `${displayName(interaction)} updates ${name}\n\n${buildCharacterStatus(name, target)}`);
-                await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
             }
+            await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
             break;
         }
 
@@ -625,15 +626,15 @@ const onComponent = async ({ interaction, client }) => {
             await interaction.update(buildList(characterStatus));
             break;
 
+        //Done doesn't change anything by itself, but if a character was in view it still posts a
+        //public readout of who wrapped up and that character's final status, then always removes
+        //the private menu - same idea as every write action above, and as Destiny/Initiative's Done
         case 'done': {
             const name = parts[2];
             const target = name && characterStatus[name];
-            if (!target) {
-                await interaction.deferUpdate();
-                await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
-                break;
-            }
-            await interaction.update({ content: '', embeds: [textEmbed(buildCharacterStatus(name, target))], components: [] });
+            await interaction.deferUpdate();
+            if (target) await announce(interaction, `${displayName(interaction)} finishes managing ${name}\n\n${buildCharacterStatus(name, target)}`);
+            await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
             break;
         }
 

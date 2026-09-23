@@ -15,6 +15,10 @@ const {
 
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
+//the channel-specific server nickname reads better than the bare Discord username -
+//interaction.member is absent in DMs, so fall back to the username there
+const displayName = (interaction) => interaction.member?.displayName || interaction.user.username;
+
 const readDiceResult = async (client, messageRef) => {
     const roll = await readData(client, messageRef, 'diceResult');
     if (!roll || Object.keys(roll).length === 0) return null;
@@ -352,8 +356,12 @@ const onComponent = async ({ interaction, client }) => {
             await interaction.update(buildMenu(diceResult, channelEmoji));
             return;
 
+        //Done doesn't change the roll, but still posts a public readout of who wrapped up and the
+        //final result, then removes the private menu - same as every other action below
         case 'done':
-            await interaction.update({ content: '', embeds: [statusEmbed(diceResult, channelEmoji)], components: [] });
+            await interaction.deferUpdate();
+            await interaction.followUp({ embeds: [statusEmbed(diceResult, channelEmoji, `${displayName(interaction)} finishes modifying the roll`)] });
+            await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
             return;
 
         case 'same': {

@@ -80,8 +80,9 @@ const buildStatusText = (initiativeOrder) => {
 };
 
 //the menu (with its Next/Previous/etc. buttons) is ephemeral - only the person who ran /initiative
-//can see or click it (see handlers.js) - so every action that actually changes the order also
-//posts this plain, button-free status as a public followUp() for the rest of the table to see
+//can see or click it (see handlers.js) - so every action that actually changes the order posts
+//this as a public followUp() for the rest of the table to see, then deletes the ephemeral menu
+//(see closeEphemeralMenu below)
 const publicStatusEmbed = (initiativeOrder, note) => textEmbed(note ? `${note}\n\n${buildStatusText(initiativeOrder)}` : buildStatusText(initiativeOrder));
 
 //parses a manually-typed order string (e.g. "nppnn") into slots
@@ -136,6 +137,16 @@ const buildMenu = (initiativeOrder, note) => {
     ));
 
     return { content: '', embeds: [textEmbed(text)], components: rows };
+};
+
+//Next/Previous/Roll/Set/Reset/Modify/Done all remove the private ephemeral menu once they've
+//posted the public readout - deferUpdate() acknowledges the click without touching the menu
+//message, then deleteReply() removes it after followUp() has the public post out. Re-running
+///initiative opens a fresh menu.
+const closeEphemeralMenu = async (interaction, initiativeOrder, note) => {
+    await interaction.deferUpdate();
+    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
+    await interaction.deleteReply();
 };
 
 //Slash command entry point - handlers.js has already deferred the reply
@@ -264,9 +275,8 @@ const rollInitiativePool = async ({ interaction, client, state }) => {
     }
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder, true);
-    //keep the private control panel ready for the next click, and announce the roll publicly
-    await interaction.update(buildMenu(initiativeOrder));
-    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
+    //announce the roll publicly, then remove the private control panel
+    await closeEphemeralMenu(interaction, initiativeOrder, note);
 };
 
 //---------------------------------------------------------------- set / modify
@@ -285,8 +295,8 @@ const showSetModal = (interaction) => interaction.showModal(buildOrderModal('ini
 const showModifyModal = (interaction) => interaction.showModal(buildOrderModal('init:modifyModal', 'Modify Initiative Order'));
 
 //these modals are only ever shown from a button (see showSetModal/showModifyModal below), so the
-//submission can use update() to edit that same original message in one round trip, same as a
-//plain button click - see modules/SW.GENESYS/roll.js's safeUpdate for the general pattern
+//submission can use deferUpdate()/deleteReply() on that same original message via
+//closeEphemeralMenu(), same as a plain button click
 const submitSetModal = async ({ interaction, client }) => {
     const messageRef = asMessageRef(interaction);
     const order = interaction.fields.getTextInputValue('order').toLowerCase().trim();
@@ -294,8 +304,7 @@ const submitSetModal = async ({ interaction, client }) => {
     const initiativeOrder = initializeInitOrder();
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    await interaction.update(buildMenu(initiativeOrder));
-    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, `${displayName(interaction)} sets the initiative order`)] });
+    await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} sets the initiative order`);
 };
 
 const submitModifyModal = async ({ interaction, client }) => {
@@ -305,8 +314,7 @@ const submitModifyModal = async ({ interaction, client }) => {
 
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    await interaction.update(buildMenu(initiativeOrder));
-    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, `${displayName(interaction)} modifies the initiative order`)] });
+    await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} modifies the initiative order`);
 };
 
 //---------------------------------------------------------------- router
@@ -376,13 +384,14 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     //readInitiativeOrder is a Firestore read, not a Discord call, so it still finishes well within
-    //Discord's response window before the single interaction.update() call each branch ends with
+    //Discord's response window before the closeEphemeralMenu() call each branch ends with
     const messageRef = asMessageRef(interaction);
     let initiativeOrder = await readInitiativeOrder(client, messageRef);
 
-    //Done just closes the menu and shows the current order with no further buttons
+    //Done posts a public readout so the table sees who ran /initiative and the order it ended up
+    //with, then removes the private menu - same as every other action below
     if (action === 'done') {
-        await interaction.update({ content: '', embeds: [textEmbed(buildStatusText(initiativeOrder))], components: [] });
+        await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} finished setting up the initiative order`);
         return;
     }
 
@@ -425,9 +434,8 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    //keep the private control panel ready for the next click, and announce the change publicly
-    await interaction.update(buildMenu(initiativeOrder));
-    await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
+    //announce the change publicly, then remove the private control panel
+    await closeEphemeralMenu(interaction, initiativeOrder, note);
 };
 
 exports.initiative = initiative;

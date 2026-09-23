@@ -14,6 +14,10 @@ const {
 
 const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDescription(text);
 
+//the channel-specific server nickname reads better than the bare Discord username -
+//interaction.member is absent in DMs, so fall back to the username there
+const displayName = (interaction) => interaction.member?.displayName || interaction.user.username;
+
 //Select's buttons show each specific rolled die's own face (e.g. "blackst"), unlike the Add pool
 //builder below (and modules/L5R/roll.js's own) which only need one generic icon per type
 const CUSTOM_EMOJI_PATTERN = /^<a?:\w+:\d+>$/;
@@ -290,8 +294,12 @@ const onComponent = async ({ interaction, client }) => {
 			await interaction.update(await buildMenu(diceResult, channelEmoji));
 			return;
 
+		//Done doesn't change the roll, but still posts a public readout of who wrapped up and the
+		//final result, then removes the private menu - same as every other action below
 		case 'done':
-			await interaction.update({ content: '', embeds: [await statusEmbed(diceResult, channelEmoji)], components: [] });
+			await interaction.deferUpdate();
+			await interaction.followUp({ embeds: [await statusEmbed(diceResult, channelEmoji, `${displayName(interaction)} finishes modifying the roll`)] });
+			await interaction.deleteReply().catch((error) => main.logError('reroll onComponent', error));
 			return;
 
 		case 'same': {
