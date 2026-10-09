@@ -31,7 +31,7 @@ const writeData = (client, message, dataSet, data, merge = false) => {
     //(see modules/functions.js for the full explanation)
     const main = require('../index');
     let dbRef = getDbRef(client, message, dataSet);
-    dbRef.set({ [dataSet]: data }, { merge }).catch((error) => main.logError('writeData', error));
+    return dbRef.set({ [dataSet]: data }, { merge }).catch((error) => main.logError('writeData', error));
 };
 
 const getDbRef = (client, message, dataSet) => {
@@ -46,7 +46,8 @@ const getDbRef = (client, message, dataSet) => {
         dbRef = dbRef.collection('Channel').doc(message.channel.id);
     }
 
-    if (dataSet === 'diceResult') {
+    //per-user data within the channel - the last roll, and /character's in-progress obligation/duty/morality/inventory edit
+    if (dataSet === 'diceResult' || dataSet === 'trackDraft') {
         dbRef = dbRef.collection('User').doc(message.author.id);
     }
 

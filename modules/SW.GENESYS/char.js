@@ -23,9 +23,19 @@ const textEmbed = (text) => new EmbedBuilder().setColor(Colors.DarkNavy).setDesc
 const displayName = (interaction) => interaction.member?.displayName || interaction.user.username;
 
 //the whole menu is ephemeral (see handlers.js), so only the person managing characters can see
-//it - every action that actually writes a change also posts this plain, button-free
-//announcement as a public followUp() so the rest of the table knows what happened
-const announce = (interaction, text) => interaction.followUp({ embeds: [textEmbed(text)] });
+//it - every action that actually writes a change posts a plain, button-free announcement as a
+//public followUp() so the rest of the table knows what happened, then removes the private menu
+//(same as Destiny/Initiative). deferUpdate() acknowledges the click/modal without touching the
+//menu message, so deleteReply() can remove it once the public post is out. With no text there's
+//nothing to report, so it just removes the menu. Re-running /character opens a fresh one.
+const closeMenu = async (interaction, text) => {
+    //required lazily to avoid a load-order-dependent circular require with ../../index
+    //(see modules/functions.js for the full explanation)
+    const main = require('../../index');
+    await interaction.deferUpdate();
+    if (text) await interaction.followUp({ embeds: [textEmbed(text)] });
+    await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
+};
 
 const readCharacters = (client, messageRef) => readData(client, messageRef, 'characterStatus');
 const writeCharacters = (client, messageRef, characterStatus) => writeData(client, messageRef, 'characterStatus', characterStatus);
@@ -156,8 +166,7 @@ const submitAddModal = async ({ interaction, client }) => {
     characterStatus[name] = character;
     writeCharacters(client, messageRef, characterStatus);
 
-    await interaction.update({ content: '', embeds: [textEmbed(buildCharacterStatus(name, character))], components: [backAndDoneRow(name)] });
-    await announce(interaction, `${displayName(interaction)} adds a new character:\n\n${buildCharacterStatus(name, character)}`);
+    await closeMenu(interaction, `${displayName(interaction)} adds a new character:\n\n${buildCharacterStatus(name, character)}`);
 };
 
 //---------------------------------------------------------------- shared: character picker
@@ -233,8 +242,7 @@ const submitCritModal = async ({ interaction, client, name, wDelta, sDelta }) =>
         await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
         return;
     }
-    await interaction.update(buildModifyScreen(name, target, wDelta, sDelta));
-    await announce(interaction, `${displayName(interaction)} adds ${critName(number)} (${number}) to ${name}`);
+    await closeMenu(interaction, `${displayName(interaction)} adds ${critName(number)} (${number}) to ${name}`);
 };
 
 //shows each of the character's current crits as its own Remove button, so the user picks one
@@ -310,97 +318,121 @@ const submitCreditsModal = async ({ interaction, client, name, wDelta, sDelta })
     characterStatus[name] = target;
     writeCharacters(client, messageRef, characterStatus);
 
-    await interaction.update(buildModifyScreen(name, target, wDelta, sDelta, `Credits ${amount >= 0 ? '+' : ''}${amount} → ${target.credits}`));
-    await announce(interaction, `${displayName(interaction)} changes ${name}'s credits by ${amount >= 0 ? '+' : ''}${amount} (now ${target.credits})`);
+    await closeMenu(interaction, `${displayName(interaction)} changes ${name}'s credits by ${amount >= 0 ? '+' : ''}${amount} (now ${target.credits})`);
 };
 
 //---------------------------------------------------------------- modify: obligation/duty/morality/inventory
 
 const TRACKED_TYPES = ['obligation', 'duty', 'morality', 'inventory'];
 
-//shows the entries for one tracked type (obligation/duty/morality/inventory), each with its own Remove
-//button, plus a way to add a new one. Entries are removed by position (in a freshly-sorted list)
-//rather than by name in the customId, since names are free text and could contain ":" or run
-//long - an index is short, safe, and always resolved against the current data at click-time.
-const buildTrackedTypeScreen = (name, character, type, wDelta, sDelta) => {
-    const entries = character[type] || {};
-    const entryNames = Object.keys(entries).sort();
+//The tracked-type screens batch their edits: Add, Remove, + and - all change a per-user draft copy
+//of the character's entries for that type, and only Done writes the draft back to the character and
+//announces it (Back just discards it). The draft lives in Firestore rather than memory for the same
+//multi-shard reason as the wound/strain deltas (see the note at the top), and its writes are awaited
+//so a quick second click can't read a stale draft.
+const TRACK_PAGE_SIZE = 4;
 
-    let content = `__**${name} - ${upperFirst(type)}**__`;
+//what a single entry of each type is called in labels and modals
+const entryNoun = (type) => type === 'inventory' ? 'Item' : upperFirst(type);
+
+const readDraft = (client, messageRef) => readData(client, messageRef, 'trackDraft');
+const writeDraft = (client, messageRef, name, type, entries) => writeData(client, messageRef, 'trackDraft', { name, type, entries });
+
+//a stored draft only counts if it belongs to this character and type - otherwise start from the saved entries
+const draftEntries = (draft, name, type, character) =>
+    (draft && draft.name === name && draft.type === type && draft.entries) ? draft.entries : { ...(character[type] || {}) };
+
+const describeTrackedChanges = (type, before, after) =>
+    Object.keys({ ...before, ...after }).sort().flatMap(entry => {
+        if (!(entry in after)) return [`Removed ${entryNoun(type)} ${entry}`];
+        if (!(entry in before)) return [`Added ${entryNoun(type)} ${entry}: ${after[entry]}`];
+        if (before[entry] !== after[entry]) return [`${entryNoun(type)} ${entry}: ${before[entry]} → ${after[entry]}`];
+        return [];
+    });
+
+//one row per entry - a disabled name/amount label, then -, + and Remove - with TRACK_PAGE_SIZE
+//entries per page so the control row (Add, paging, Back, Done) always fits in Discord's 5 rows.
+//Entries are addressed by index in the sorted draft rather than by name (names are free text and
+//could contain ":" or run long), resolved against the current draft at click-time.
+const buildTrackedTypeScreen = (name, character, type, entries, wDelta, sDelta, page = 0, notice) => {
+    const entryNames = Object.keys(entries).sort();
+    const pageCount = Math.max(1, Math.ceil(entryNames.length / TRACK_PAGE_SIZE));
+    page = clamp(page || 0, 0, pageCount - 1);
+
+    let content = notice ? `${notice}\n\n` : '';
+    content += `__**${name} - ${upperFirst(type)}**__`;
     if (entryNames.length === 0) content += `\nNo ${type} entries.`;
-    else entryNames.forEach(entryName => content += `\n${entryName}: ${entries[entryName]}`);
-    if (content.length > 1900) content = `__**${name} - ${upperFirst(type)}**__\nToo many entries to display.`;
+    else entryNames.forEach(entry => content += `\n${entry}: ${entries[entry]}`);
+    const changes = describeTrackedChanges(type, character[type] || {}, entries);
+    if (changes.length > 0) content += `\n\n**Pending (press Done to apply):**\n${changes.join('\n')}`;
+    if (content.length > 4000) content = `${content.slice(0, 4000)}…`;
 
     const rows = [];
-    const removable = entryNames.slice(0, 20);
-    for (let i = 0; i < removable.length; i += 5) {
+    for (let i = page * TRACK_PAGE_SIZE; i < Math.min(entryNames.length, (page + 1) * TRACK_PAGE_SIZE); i++) {
+        const entry = entryNames[i];
+        const id = (op) => `char:trackOp:${op}:${type}:${name}:${i}:${wDelta}:${sDelta}:${page}`;
         rows.push(new ActionRowBuilder().addComponents(
-            removable.slice(i, i + 5).map((entryName, j) => new ButtonBuilder()
-                .setCustomId(`char:trackRemove:${type}:${name}:${i + j}:${wDelta}:${sDelta}`)
-                .setLabel(`Remove ${entryName}`.slice(0, 80))
-                .setStyle(ButtonStyle.Danger))
+            new ButtonBuilder().setCustomId(`char:trackLabel:${i}`).setLabel(`${entry}: ${entries[entry]}`.slice(0, 80)).setStyle(ButtonStyle.Secondary).setDisabled(true),
+            new ButtonBuilder().setCustomId(id('dec')).setLabel('-').setStyle(ButtonStyle.Primary).setDisabled(entries[entry] <= 0),
+            new ButtonBuilder().setCustomId(id('inc')).setLabel('+').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(id('del')).setLabel('Remove').setStyle(ButtonStyle.Danger)
         ));
     }
-    rows.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`char:trackAdd:${type}:${name}:${wDelta}:${sDelta}`).setLabel(`Add ${upperFirst(type)}`).setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`char:mod:${name}:${wDelta}:${sDelta}`).setLabel('Back').setStyle(ButtonStyle.Secondary)
-    ));
 
-    return { content: '', embeds: [textEmbed(content)], components: rows.slice(0, 5) };
+    const controls = [new ButtonBuilder().setCustomId(`char:trackAdd:${type}:${name}:${wDelta}:${sDelta}:${page}`).setLabel(`Add ${entryNoun(type)}`).setStyle(ButtonStyle.Success)];
+    if (pageCount > 1) {
+        controls.push(
+            new ButtonBuilder().setCustomId(`char:trackPage:${type}:${name}:${wDelta}:${sDelta}:${page - 1}`).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page === 0),
+            new ButtonBuilder().setCustomId(`char:trackPage:${type}:${name}:${wDelta}:${sDelta}:${page + 1}`).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(page === pageCount - 1)
+        );
+    }
+    controls.push(
+        new ButtonBuilder().setCustomId(`char:mod:${name}:${wDelta}:${sDelta}`).setLabel('Back').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`char:trackDone:${type}:${name}:${wDelta}:${sDelta}`).setLabel('Done').setStyle(ButtonStyle.Primary)
+    );
+    rows.push(new ActionRowBuilder().addComponents(controls));
+
+    return { content: '', embeds: [textEmbed(content)], components: rows };
 };
 
-const buildTrackAddModal = (type, name, wDelta, sDelta) => {
-    const labelInput = new TextInputBuilder().setCustomId('label').setLabel(`${upperFirst(type)} name`).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20);
-    const amountInput = new TextInputBuilder().setCustomId('amount').setLabel('Amount').setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder('e.g. 5');
-    return new ModalBuilder().setCustomId(`char:trackAddModal:${type}:${name}:${wDelta}:${sDelta}`).setTitle(`Add ${upperFirst(type)}`).addComponents(
+const buildTrackAddModal = (type, name, wDelta, sDelta, page) => {
+    const labelInput = new TextInputBuilder().setCustomId('label').setLabel(`${entryNoun(type)} name`).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(20);
+    const amountInput = new TextInputBuilder().setCustomId('amount').setLabel('Amount').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('default 1');
+    return new ModalBuilder().setCustomId(`char:trackAddModal:${type}:${name}:${wDelta}:${sDelta}:${page}`).setTitle(`Add ${entryNoun(type)}`).addComponents(
         new ActionRowBuilder().addComponents(labelInput),
         new ActionRowBuilder().addComponents(amountInput)
     );
 };
 
-const showTrackAddModal = (interaction, type, name, wDelta, sDelta) => interaction.showModal(buildTrackAddModal(type, name, wDelta, sDelta));
+const showTrackAddModal = (interaction, type, name, wDelta, sDelta, page) => interaction.showModal(buildTrackAddModal(type, name, wDelta, sDelta, page));
 
-const submitTrackAddModal = async ({ interaction, client, type, name, wDelta, sDelta }) => {
+const submitTrackAddModal = async ({ interaction, client, type, name, wDelta, sDelta, page }) => {
     const messageRef = asMessageRef(interaction);
-    const characterStatus = await readCharacters(client, messageRef).catch(() => ({}));
-
-    const label = interaction.fields.getTextInputValue('label').trim().toUpperCase();
-    const amount = toInt(interaction.fields.getTextInputValue('amount'));
-
-    if (!label) {
-        await interaction.update({ content: '', embeds: [textEmbed('Enter a name for this entry.')], components: [backAndDoneRow(name)] });
-        return;
-    }
-    if (!amount) {
-        await interaction.update({ content: '', embeds: [textEmbed('Enter a non-zero amount.')], components: [backAndDoneRow(name)] });
-        return;
-    }
-
+    const [characterStatus, draft] = await Promise.all([
+        readCharacters(client, messageRef).catch(() => ({})),
+        readDraft(client, messageRef).catch(() => ({}))
+    ]);
     const target = characterStatus[name];
     if (!target) {
         await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
         return;
     }
-    if (!target[type]) target[type] = {};
-    target[type][label] = (target[type][label] || 0) + amount;
-    characterStatus[name] = target;
-    writeCharacters(client, messageRef, characterStatus);
+    const entries = draftEntries(draft, name, type, target);
 
-    await interaction.update(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
-    await announce(interaction, `${displayName(interaction)} adds ${upperFirst(type)} "${label}: ${amount}" to ${name}`);
-};
+    const label = interaction.fields.getTextInputValue('label').trim().toUpperCase();
+    const amountText = interaction.fields.getTextInputValue('amount').trim();
+    const amount = amountText ? toInt(amountText) : 1;
+    if (!label || amount <= 0) {
+        const notice = !label ? `Enter a name for the ${entryNoun(type).toLowerCase()}.` : 'Enter a positive amount.';
+        await interaction.update(buildTrackedTypeScreen(name, target, type, entries, wDelta, sDelta, page, notice));
+        return;
+    }
 
-//removes the entry at `index` in the alphabetically-sorted list of the type's current entries
-const removeTrackedEntry = (client, messageRef, characterStatus, name, type, index) => {
-    const target = characterStatus[name];
-    if (!target) return null;
-    if (!target[type]) target[type] = {};
-    const entryNames = Object.keys(target[type]).sort();
-    const entryName = entryNames[index];
-    if (entryName !== undefined) delete target[type][entryName];
-    characterStatus[name] = target;
-    writeCharacters(client, messageRef, characterStatus);
-    return target;
+    entries[label] = (entries[label] || 0) + amount;
+    await writeDraft(client, messageRef, name, type, entries);
+    //jump to the page the entry landed on so it's right there to adjust
+    const addedPage = Math.floor(Object.keys(entries).sort().indexOf(label) / TRACK_PAGE_SIZE);
+    await interaction.update(buildTrackedTypeScreen(name, target, type, entries, wDelta, sDelta, addedPage));
 };
 
 //---------------------------------------------------------------- modify
@@ -474,9 +506,6 @@ const buildList = (characterStatus) => {
 //---------------------------------------------------------------- router
 
 const onComponent = async ({ interaction, client }) => {
-    //required lazily to avoid a load-order-dependent circular require with ../../index
-    //(see modules/functions.js for the full explanation)
-    const main = require('../../index');
     const parts = interaction.customId.split(':');
     const action = parts[1];
 
@@ -484,7 +513,7 @@ const onComponent = async ({ interaction, client }) => {
         if (action === 'addModal') await submitAddModal({ interaction, client });
         else if (action === 'critModal') await submitCritModal({ interaction, client, name: parts[2], wDelta: +parts[3], sDelta: +parts[4] });
         else if (action === 'creditsModal') await submitCreditsModal({ interaction, client, name: parts[2], wDelta: +parts[3], sDelta: +parts[4] });
-        else if (action === 'trackAddModal') await submitTrackAddModal({ interaction, client, type: parts[2], name: parts[3], wDelta: +parts[4], sDelta: +parts[5] });
+        else if (action === 'trackAddModal') await submitTrackAddModal({ interaction, client, type: parts[2], name: parts[3], wDelta: +parts[4], sDelta: +parts[5], page: +parts[6] });
         return;
     }
 
@@ -501,7 +530,7 @@ const onComponent = async ({ interaction, client }) => {
         return;
     }
     if (action === 'trackAdd') {
-        await showTrackAddModal(interaction, parts[2], parts[3], +parts[4], +parts[5]);
+        await showTrackAddModal(interaction, parts[2], parts[3], +parts[4], +parts[5], +parts[6]);
         return;
     }
 
@@ -526,8 +555,7 @@ const onComponent = async ({ interaction, client }) => {
             const name = parts[2];
             delete characterStatus[name];
             writeCharacters(client, messageRef, characterStatus);
-            await interaction.update({ content: '', embeds: [textEmbed(`${name} has been removed.`)], components: [backAndDoneRow()] });
-            await announce(interaction, `${displayName(interaction)} removes character ${name}`);
+            await closeMenu(interaction, `${displayName(interaction)} removes character ${name}`);
             break;
         }
 
@@ -551,18 +579,58 @@ const onComponent = async ({ interaction, client }) => {
                 await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.update(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
+            //(re)opening a tracked-type screen always starts a fresh draft from the saved entries
+            const entries = { ...(target[type] || {}) };
+            await writeDraft(client, messageRef, name, type, entries);
+            await interaction.update(buildTrackedTypeScreen(name, target, type, entries, wDelta, sDelta));
             break;
         }
-        case 'trackRemove': {
-            const [type, name, index, wDelta, sDelta] = [parts[2], parts[3], +parts[4], +parts[5], +parts[6]];
-            const target = removeTrackedEntry(client, messageRef, characterStatus, name, type, index);
+        case 'trackOp':
+        case 'trackPage': {
+            const isOp = action === 'trackOp';
+            const [type, name, wDelta, sDelta, page] = isOp
+                ? [parts[3], parts[4], +parts[6], +parts[7], +parts[8]]
+                : [parts[2], parts[3], +parts[4], +parts[5], +parts[6]];
+            const target = characterStatus[name];
             if (!target) {
                 await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.update(buildTrackedTypeScreen(name, target, type, wDelta, sDelta));
-            await announce(interaction, `${displayName(interaction)} removes a ${type} entry from ${name}`);
+            const entries = draftEntries(await readDraft(client, messageRef).catch(() => ({})), name, type, target);
+            if (isOp) {
+                const [op, index] = [parts[2], +parts[5]];
+                const entry = Object.keys(entries).sort()[index];
+                if (entry !== undefined) {
+                    if (op === 'inc') entries[entry] += 1;
+                    else if (op === 'dec') entries[entry] = Math.max(0, entries[entry] - 1);
+                    else if (op === 'del') delete entries[entry];
+                    await writeDraft(client, messageRef, name, type, entries);
+                }
+            }
+            await interaction.update(buildTrackedTypeScreen(name, target, type, entries, wDelta, sDelta, page));
+            break;
+        }
+        case 'trackDone': {
+            const [type, name, wDelta, sDelta] = [parts[2], parts[3], +parts[4], +parts[5]];
+            const target = characterStatus[name];
+            if (!target) {
+                await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
+                break;
+            }
+            const entries = draftEntries(await readDraft(client, messageRef).catch(() => ({})), name, type, target);
+            const changes = describeTrackedChanges(type, target[type] || {}, entries);
+            //Done applies everything pending at once - the draft plus any wound/strain changes
+            //carried over from the Modify screen, same as that screen's own Done
+            target[type] = entries;
+            applyWoundDelta(target, wDelta);
+            applyStrainDelta(target, sDelta);
+            characterStatus[name] = target;
+            writeCharacters(client, messageRef, characterStatus);
+            writeDraft(client, messageRef, null, null, {});
+            const summary = changes.length > 0 ? `\n${changes.join('\n')}` : '';
+            await closeMenu(interaction, (changes.length || wDelta || sDelta)
+                ? `${displayName(interaction)} updates ${name}${summary}\n\n${buildCharacterStatus(name, target)}`
+                : null);
             break;
         }
         case 'critRemoveAsk': {
@@ -582,9 +650,11 @@ const onComponent = async ({ interaction, client }) => {
                 await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            const prefix = removed !== null ? `Removed ${critName(removed)} (${removed})` : undefined;
-            await interaction.update(buildModifyScreen(name, target, wDelta, sDelta, prefix));
-            if (removed !== null) await announce(interaction, `${displayName(interaction)} removes ${critName(removed)} (${removed}) from ${name}`);
+            if (removed === null) {
+                await interaction.update(buildModifyScreen(name, target, wDelta, sDelta));
+                break;
+            }
+            await closeMenu(interaction, `${displayName(interaction)} removes ${critName(removed)} (${removed}) from ${name}`);
             break;
         }
         case 'critRoll': {
@@ -595,8 +665,7 @@ const onComponent = async ({ interaction, client }) => {
                 await interaction.update({ content: '', embeds: [textEmbed(`${name} no longer exists.`)], components: [backAndDoneRow()] });
                 break;
             }
-            await interaction.update(buildModifyScreen(name, target, wDelta, sDelta, `Rolled ${roll} → ${critName(roll)}`));
-            await announce(interaction, `${displayName(interaction)} rolls a critical injury for ${name}: ${roll} → ${critName(roll)}`);
+            await closeMenu(interaction, `${displayName(interaction)} rolls a critical injury for ${name}: ${roll} → ${critName(roll)}`);
             break;
         }
         case 'modApply': {
@@ -610,15 +679,10 @@ const onComponent = async ({ interaction, client }) => {
             applyStrainDelta(target, sDelta);
             characterStatus[name] = target;
             writeCharacters(client, messageRef, characterStatus);
-            await interaction.deferUpdate();
             //0/0 is a harmless no-op (see buildModifyScreen's comment) - nothing changed at this
-            //step, so there's nothing new to announce (any earlier credits/crit/track changes in
-            //this session were already announced individually as they happened), but Done still
-            //ends the session and removes the private menu either way
-            if (wDelta || sDelta) {
-                await announce(interaction, `${displayName(interaction)} updates ${name}\n\n${buildCharacterStatus(name, target)}`);
-            }
-            await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
+            //step, so there's nothing new to announce, but Done still ends the session and
+            //removes the private menu either way
+            await closeMenu(interaction, (wDelta || sDelta) ? `${displayName(interaction)} updates ${name}\n\n${buildCharacterStatus(name, target)}` : null);
             break;
         }
 
@@ -632,9 +696,7 @@ const onComponent = async ({ interaction, client }) => {
         case 'done': {
             const name = parts[2];
             const target = name && characterStatus[name];
-            await interaction.deferUpdate();
-            if (target) await announce(interaction, `${displayName(interaction)} finishes managing ${name}\n\n${buildCharacterStatus(name, target)}`);
-            await interaction.deleteReply().catch((error) => main.logError('char onComponent', error));
+            await closeMenu(interaction, target ? `${displayName(interaction)} finishes managing ${name}\n\n${buildCharacterStatus(name, target)}` : null);
             break;
         }
 
