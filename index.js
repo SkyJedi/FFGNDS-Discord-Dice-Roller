@@ -12,9 +12,8 @@ const ClientOptions = {
         MessageManager: 10
     }),
     partials: [Partials.Channel],
-    //GuildMessages/DirectMessages/MessageContent are only needed to catch people still using the old
-    //! commands and point them at re-inviting the bot - see handlers.onLegacyMessage
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent]
+    //slash commands only - MessageContent is privileged and D1 (verified) isn't approved for it
+    intents: [GatewayIntentBits.Guilds]
 };
 const client = new Client(ClientOptions);
 
@@ -44,7 +43,7 @@ const logError = (context, error) => {
     console.error(context, error);
 };
 
-//none of the interactionCreate/messageCreate/threadCreate listeners below are awaited by
+//none of the interactionCreate/threadCreate listeners below are awaited by
 //discord.js, and none of the handler chains they call into (onInteraction's command switch,
 //onComponent's per-module button routers, ...) wrap themselves in try/catch - so a single
 //rejected editReply/followUp/etc. anywhere in that chain (a stale interaction token, a Discord
@@ -59,7 +58,6 @@ client.login(token).catch(error => console.error(error));
 
 // Register our event handlers (defined below):
 client.on('interactionCreate', interaction => handlers.onInteraction({ interaction, client }).catch((error) => logError('onInteraction', error)));
-client.on('messageCreate', message => handlers.onLegacyMessage({ message, client }).catch((error) => logError('onLegacyMessage', error)));
 client.on('clientReady', async () => {
     const count = await emoji.loadEmojis(client).catch((error) => logError('loadEmojis', error));
     if (count !== undefined) console.log(`Loaded ${count} application emoji`);

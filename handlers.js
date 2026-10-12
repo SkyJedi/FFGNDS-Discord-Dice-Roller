@@ -130,23 +130,4 @@ const onInteraction = async ({ interaction, client }) => {
     }
 };
 
-//The bot now only responds to slash commands, but people used to the old ! commands won't see that
-//until something tells them - this catches messages that still use the old prefix and points them at
-//re-inviting the bot with the applications.commands scope it needs for slash commands to appear at all.
-const onLegacyMessage = async ({ message, client }) => {
-    if (message.author.bot) return;
-
-    let prefix = await readData(client, message, 'prefix').catch(() => null);
-    if (!prefix) prefix = config.prefix;
-    if (!prefix || !message.content.startsWith(prefix)) return;
-
-    //failIfNotExists: false - the user may delete their ! message before we reply (Discord 50035)
-    await message.reply({
-        content: `${client.user.username} now uses Discord's slash commands instead of \`${prefix}\` commands - type \`/\` to see what's available. ` +
-            `If you don't see any slash commands for ${client.user.username}, ask a server admin to re-authorize the bot (this won't duplicate or remove it) here: ${modules.inviteUrl(client.user.id)}`,
-        failIfNotExists: false
-    }).catch((error) => main.logError('onLegacyMessage', error));
-};
-
 exports.onInteraction = onInteraction;
-exports.onLegacyMessage = onLegacyMessage;
