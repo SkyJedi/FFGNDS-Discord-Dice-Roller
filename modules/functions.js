@@ -16,12 +16,8 @@ const polyhedral = (sides, str, interaction) => {
     const main = require('../index');
     let total = 0, r = 0, text = '', modifier;
     if (str.length > 0) modifier = +(str[str.length - 1]).replace(/\D/g, '');
-    //no modifier
-    if (str.length < 1) {
-        total = dice(sides);
-        text = ` rolled a d${sides}: ${total}`;
-        //addition modifier
-    } else if (str.some(e => e.includes('+'))) {
+    //addition modifier
+    if (str.some(e => e.includes('+'))) {
         r = dice(sides);
         total = r + modifier;
         text = ` rolled a d${sides}: ${r} + ${modifier} for at total of ${total}`;
@@ -30,6 +26,10 @@ const polyhedral = (sides, str, interaction) => {
         r = dice(sides);
         total = r - modifier;
         text = ` rolled a d${sides}: ${r} - ${modifier} for a total of ${total}`;
+        //no modifier, or input without +/- (used to leave text empty and crash the embed)
+    } else {
+        total = dice(sides);
+        text = ` rolled a d${sides}: ${total}`;
     }
     main.respond(interaction, text);
     return total;
