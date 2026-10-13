@@ -2,6 +2,8 @@ services:
   dice-roller:
     build: .
     restart: unless-stopped
+    # D1 spawns ~13 shard processes; ~1.9 GB seen for the whole tree on the server
+    mem_limit: 2560m
     volumes:
       - ./config.json:/usr/src/app/config.json:ro
       - ./d1-firestore.json:/usr/src/app/d1-firestore.json:ro
