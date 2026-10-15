@@ -50,9 +50,19 @@ const getParams = (interaction) =>
 const inviteUrl = (clientId) =>
     `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot%20applications.commands&permissions=105227020288`;
 
+//Google Form "pre-filled link" with Bot=BOT; one form serves every bot and site.
+//The link has no Server field yet, so the SERVER replace below is a no-op until one is added (=SERVER).
+const FEEDBACK_FORM = 'https://docs.google.com/forms/d/e/1FAIpQLSedneM-ImrTrMm92VgBKOThjvEsf2Jq95HiesN7pxh_8wWg-w/viewform?usp=pp_url&entry.1736849516=BOT';
+//encodeURIComponent leaves ( and ), which would end the [here](...) markdown link early
+const formValue = (text) => encodeURIComponent(text).replace(/\(/g, '%28').replace(/\)/g, '%29');
+const feedbackUrl = (bot, server) => FEEDBACK_FORM
+    .replace('=BOT', `=${formValue(bot)}`)
+    .replace('=SERVER', `=${formValue(server)}`);
+
 exports.asMessageRef = asMessageRef;
 exports.asyncForEach = asyncForEach;
 exports.dice = dice;
+exports.feedbackUrl = feedbackUrl;
 exports.getParams = getParams;
 exports.inviteUrl = inviteUrl;
 exports.modifierRoll = polyhedral;

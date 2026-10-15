@@ -15,7 +15,7 @@ const swRerollComponent = require('./modules/SW.GENESYS/').rerollComponent;
 const l5rRollComponent = require('./modules/L5R/').rollComponent;
 const l5rRerollComponent = require('./modules/L5R/').rerollComponent;
 
-const SYSTEM_AGNOSTIC_COMMANDS = ['stats', 'ver', 'poly', 'swrpg', 'genesys', 'l5r', 'invite', 'help', 'roll'];
+const SYSTEM_AGNOSTIC_COMMANDS = ['stats', 'ver', 'poly', 'swrpg', 'genesys', 'l5r', 'invite', 'feedback', 'help', 'roll'];
 const SW_GENESYS_COMMANDS = ['character', 'crit', 'shipcrit', 'species', 'gleepglop', 'destiny', 'story', 'initiative', 'reroll', 'obligation', 'duty', 'oldroll'];
 const L5R_COMMANDS = ['keep', 'add', 'reroll', 'oldroll'];
 const ADMIN_COMMANDS = ['restart'];
@@ -66,7 +66,7 @@ const onInteraction = async ({ interaction, client }) => {
     //and can never change on later edits, so this has to be decided here before that goes out.
     // NOTE: this means these menus' buttons only work for the person who ran the command - nobody
     // else in the channel can see or click them, even for shared trackers like /destiny or /initiative.
-    const EPHEMERAL_COMMANDS = ['roll', 'reroll', 'character', 'destiny', 'story', 'initiative'];
+    const EPHEMERAL_COMMANDS = ['roll', 'reroll', 'character', 'destiny', 'story', 'initiative', 'feedback'];
     await interaction.deferReply(EPHEMERAL_COMMANDS.includes(command) ? { flags: MessageFlags.Ephemeral } : undefined);
     const messageRef = modules.asMessageRef(interaction);
 
@@ -101,6 +101,14 @@ const onInteraction = async ({ interaction, client }) => {
                 .setTitle(`**Invite**`)
                 .setDescription(`Click [here](${modules.inviteUrl(client.user.id)}) to invite the bot to your server!`);
             await main.sendMessage({ interaction, embed });
+            break;
+        case 'feedback':
+            await main.sendMessage({
+                interaction, embed: new Discord.EmbedBuilder()
+                    .setColor(Colors.Grey)
+                    .setTitle(`**Feedback**`)
+                    .setDescription(`Thanks! Click [here](${modules.feedbackUrl('D1-C3', interaction.guild?.name ?? 'Direct message')}) to tell us what you think.`)
+            });
             break;
     }
     let recognized = SYSTEM_AGNOSTIC_COMMANDS.includes(command);

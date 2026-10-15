@@ -94,6 +94,7 @@ Note: if you use the `/roll input:yyyggbbd` method you must use the single chara
 
 - `/invite` : get an invite link for @D1-C3
 - `/stats` : Displays # of servers/users bot is currently has.
+- `/feedback` : get a link to send us feedback
 
 ## Patrons
 - Caleb Smith
