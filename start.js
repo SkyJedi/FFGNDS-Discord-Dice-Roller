@@ -1,5 +1,5 @@
 const path = require('path');
-const { token } = require('./config');
+const token = require('./env').required('DISCORD_TOKEN');
 const { version } = require('./package');
 const { ShardingManager } = require('discord.js');
 const manager = new ShardingManager(path.join(__dirname, '/index.js'), { token });

@@ -2,7 +2,7 @@
 // Run manually after changing commands.js: `npm run deploy-commands`
 // Global commands can take up to an hour to propagate to all servers.
 const { Client, GatewayIntentBits } = require('discord.js');
-const { token } = require('./config');
+const token = require('./env').required('DISCORD_TOKEN');
 const commands = require('./commands');
 const { inviteUrl } = require('./modules/functions');
 

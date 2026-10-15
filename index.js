@@ -3,7 +3,7 @@
   For Custom Discord Bots please email me at Astrydax@gmail.com
 */
 const { Client, Options, Partials, GatewayIntentBits, EmbedBuilder, Colors } = require('discord.js');
-const { token } = require('./config');
+const token = require('./env').required('DISCORD_TOKEN');
 const handlers = require('./handlers');
 const emoji = require('./modules/emoji');
 

@@ -19,3 +19,4 @@ Emoji
 config.json
 d1-firestore.json
 emoji.json
+.env

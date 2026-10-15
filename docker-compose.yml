@@ -4,6 +4,9 @@ services:
     restart: unless-stopped
     # D1 spawns ~13 shard processes; ~1.9 GB seen for the whole tree on the server
     mem_limit: 2560m
+    # Secrets (Discord token, Firebase fields) are read from .env at runtime, not baked into the image.
+    # Compose refuses to start without it.
+    env_file: .env
     volumes:
+      # Non-secret settings.
       - ./config.json:/usr/src/app/config.json:ro
-      - ./d1-firestore.json:/usr/src/app/d1-firestore.json:ro
