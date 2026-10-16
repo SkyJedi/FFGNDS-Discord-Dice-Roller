@@ -15,7 +15,7 @@ const swRerollComponent = require('./modules/SW.GENESYS/').rerollComponent;
 const l5rRollComponent = require('./modules/L5R/').rollComponent;
 const l5rRerollComponent = require('./modules/L5R/').rerollComponent;
 
-const SYSTEM_AGNOSTIC_COMMANDS = ['stats', 'ver', 'poly', 'swrpg', 'genesys', 'l5r', 'invite', 'feedback', 'help', 'roll'];
+const SYSTEM_AGNOSTIC_COMMANDS = ['stats', 'ver', 'poly', 'swrpg', 'genesys', 'l5r', 'invite', 'help', 'roll'];
 const SW_GENESYS_COMMANDS = ['character', 'crit', 'shipcrit', 'species', 'gleepglop', 'destiny', 'story', 'initiative', 'reroll', 'obligation', 'duty', 'oldroll'];
 const L5R_COMMANDS = ['keep', 'add', 'reroll', 'oldroll'];
 const ADMIN_COMMANDS = ['restart'];
@@ -30,12 +30,15 @@ const onComponent = async ({ interaction, client }) => {
     if (interaction.customId.startsWith('init:')) return swInitiativeComponent({ interaction, client });
     if (interaction.customId.startsWith('reroll:')) return swRerollComponent({ interaction, client });
     if (interaction.customId.startsWith('l5rreroll:')) return l5rRerollComponent({ interaction, client });
+    if (interaction.customId === modules.feedback.MODAL_ID) return modules.feedback.onFeedbackSubmit(interaction, 'D1-C3');
 };
 
 //Called whenever a user triggers one of the bot's slash commands
 const onInteraction = async ({ interaction, client }) => {
     if (interaction.isButton() || interaction.isModalSubmit()) return onComponent({ interaction, client });
     if (!interaction.isChatInputCommand()) return;
+    //a pop-up has to be the very first answer, so /feedback skips the permission checks and deferReply below
+    if (interaction.commandName === 'feedback') return interaction.showModal(modules.feedback.feedbackModal());
 
     //check to see if external emoji and embeds can be used (not applicable in DMs)
     if (interaction.guild && interaction.channel) {
@@ -66,7 +69,7 @@ const onInteraction = async ({ interaction, client }) => {
     //and can never change on later edits, so this has to be decided here before that goes out.
     // NOTE: this means these menus' buttons only work for the person who ran the command - nobody
     // else in the channel can see or click them, even for shared trackers like /destiny or /initiative.
-    const EPHEMERAL_COMMANDS = ['roll', 'reroll', 'character', 'destiny', 'story', 'initiative', 'feedback'];
+    const EPHEMERAL_COMMANDS = ['roll', 'reroll', 'character', 'destiny', 'story', 'initiative'];
     await interaction.deferReply(EPHEMERAL_COMMANDS.includes(command) ? { flags: MessageFlags.Ephemeral } : undefined);
     const messageRef = modules.asMessageRef(interaction);
 
@@ -101,14 +104,6 @@ const onInteraction = async ({ interaction, client }) => {
                 .setTitle(`**Invite**`)
                 .setDescription(`Click [here](${modules.inviteUrl(client.user.id)}) to invite the bot to your server!`);
             await main.sendMessage({ interaction, embed });
-            break;
-        case 'feedback':
-            await main.sendMessage({
-                interaction, embed: new Discord.EmbedBuilder()
-                    .setColor(Colors.Grey)
-                    .setTitle(`**Feedback**`)
-                    .setDescription(`Thanks! Click [here](${modules.feedbackUrl('D1-C3', interaction.guild?.name ?? 'Direct message')}) to tell us what you think.`)
-            });
             break;
     }
     let recognized = SYSTEM_AGNOSTIC_COMMANDS.includes(command);
