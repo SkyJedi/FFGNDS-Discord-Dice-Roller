@@ -266,7 +266,8 @@ const rollInitiativePool = async ({ interaction, client, state }) => {
     const diceResult = rolled.diceResult.results;
     const rollResult = { success: diceResult.success, advantage: diceResult.advantage, triumph: diceResult.triumph, type: state.type };
 
-    let note = rolled.faces;
+    //name the roller, like /roll's "<name> rolls" line, so the table sees whose initiative it was
+    let note = `${displayName(interaction)} rolls initiative (${state.type === 'npc' ? 'NPC' : 'PC'})\n${rolled.faces}`;
     if (initiativeOrder.turn !== 1) {
         initiativeOrder.newslots.push(rollResult);
         note += `\n${getFace(state.type)} will be added to the initiative order in the next round`;
