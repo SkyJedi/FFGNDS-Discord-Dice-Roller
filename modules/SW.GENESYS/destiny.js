@@ -37,11 +37,12 @@ const buildPoolText = (destinyBalance, channelEmoji, names) => {
     return `${names.type} Points: ${face || 'none'}`;
 };
 
-const buildMenu = (destinyBalance, channelEmoji) => {
+const buildMenu = (destinyBalance, channelEmoji, note) => {
     const names = namesFor(channelEmoji);
+    const text = buildPoolText(destinyBalance, channelEmoji, names);
     return {
         content: '',
-        embeds: [textEmbed(buildPoolText(destinyBalance, channelEmoji, names))],
+        embeds: [textEmbed(note ? `${note}\n\n${text}` : text)],
         components: [
             new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('destiny:roll').setLabel('Roll').setStyle(ButtonStyle.Primary),
@@ -57,17 +58,19 @@ const buildMenu = (destinyBalance, channelEmoji) => {
     };
 };
 
-//Roll/Light/Dark/Set/Reset/Done all remove the private ephemeral menu once they've posted the
-//public readout - deferUpdate() acknowledges the click without touching the menu message, then
-//deleteReply() removes it after followUp() has the public post out. Re-running /destiny opens a
-//fresh menu.
-const closeEphemeralMenu = async (interaction, message) => {
+//Every action posts the public readout, then the private ephemeral menu stays up (refreshed) so
+//several rolls/spends can be done without retyping /destiny - deferUpdate() acknowledges the click
+//without touching the menu message, followUp() posts the public readout, then editReply() redraws
+//the menu. Each click hands the bot a fresh interaction token, so the menu keeps working past
+//Discord's 15-minute limit on the original reply. Only Done (keepOpen = false) removes it.
+const closeEphemeralMenu = async (interaction, message, menu) => {
     //required lazily to avoid a load-order-dependent circular require with ../../index
     //(see modules/functions.js for the full explanation)
     const main = require('../../index');
     await interaction.deferUpdate();
     await interaction.followUp({ embeds: [textEmbed(message)] });
-    await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
+    if (menu) await interaction.editReply(menu);
+    else await interaction.deleteReply().catch((error) => main.logError('destiny onComponent', error));
 };
 
 //slash command entry point - handlers.js has already deferred the reply
@@ -104,7 +107,7 @@ const submitSetModal = async ({ interaction, client }) => {
     destinyBalance.dark = toInt(interaction.fields.getTextInputValue('dark'));
     writeBalance(client, messageRef, destinyBalance);
 
-    await closeEphemeralMenu(interaction, `${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`);
+    await closeEphemeralMenu(interaction, `${displayName(interaction)} sets the ${names.type} Points\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`, buildMenu(destinyBalance, channelEmoji));
 };
 
 //---------------------------------------------------------------- router
@@ -183,15 +186,15 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     //an error/no-op (no dice rolled, no points available) stays private - nothing actually
-    //happened, so there's nothing worth telling the rest of the table
+    //happened, so there's nothing worth telling the rest of the table. The menu stays up.
     if (!changed) {
-        await interaction.update({ content: '', embeds: [textEmbed(message)], components: [] });
+        await interaction.update(buildMenu(destinyBalance, channelEmoji, message));
         return;
     }
 
     writeBalance(client, messageRef, destinyBalance);
-    //announce the change publicly, then remove the private control panel
-    await closeEphemeralMenu(interaction, `${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`);
+    //announce the change publicly; the private control panel stays up for the next action
+    await closeEphemeralMenu(interaction, `${message}\n\n${buildPoolText(destinyBalance, channelEmoji, names)}`, buildMenu(destinyBalance, channelEmoji));
 };
 
 exports.destiny = destiny;

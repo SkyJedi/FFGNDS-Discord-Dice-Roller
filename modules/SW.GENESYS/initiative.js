@@ -139,14 +139,16 @@ const buildMenu = (initiativeOrder, note) => {
     return { content: '', embeds: [textEmbed(text)], components: rows };
 };
 
-//Next/Previous/Roll/Set/Reset/Modify/Done all remove the private ephemeral menu once they've
-//posted the public readout - deferUpdate() acknowledges the click without touching the menu
-//message, then deleteReply() removes it after followUp() has the public post out. Re-running
-///initiative opens a fresh menu.
-const closeEphemeralMenu = async (interaction, initiativeOrder, note) => {
+//Every action posts the public readout, then the private ephemeral menu stays up (refreshed) so
+//several rolls/turns can be done without retyping /initiative - deferUpdate() acknowledges the
+//click without touching the menu message, followUp() posts the public readout, then editReply()
+//redraws the menu. Each click hands the bot a fresh interaction token, so the menu keeps working
+//past Discord's 15-minute limit on the original reply. Only Done (keepOpen = false) removes it.
+const closeEphemeralMenu = async (interaction, initiativeOrder, note, keepOpen = true) => {
     await interaction.deferUpdate();
     await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
-    await interaction.deleteReply();
+    if (keepOpen) await interaction.editReply(buildMenu(initiativeOrder));
+    else await interaction.deleteReply();
 };
 
 //Slash command entry point - handlers.js has already deferred the reply
@@ -276,7 +278,7 @@ const rollInitiativePool = async ({ interaction, client, state }) => {
     }
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder, true);
-    //announce the roll publicly, then remove the private control panel
+    //announce the roll publicly; the private control panel stays up for the next roll
     await closeEphemeralMenu(interaction, initiativeOrder, note);
 };
 
@@ -392,7 +394,7 @@ const onComponent = async ({ interaction, client }) => {
     //Done posts a public readout so the table sees who ran /initiative and the order it ended up
     //with, then removes the private menu - same as every other action below
     if (action === 'done') {
-        await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} finished setting up the initiative order`);
+        await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} finished setting up the initiative order`, false);
         return;
     }
 
@@ -435,7 +437,7 @@ const onComponent = async ({ interaction, client }) => {
     }
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    //announce the change publicly, then remove the private control panel
+    //announce the change publicly; the private control panel stays up
     await closeEphemeralMenu(interaction, initiativeOrder, note);
 };
 
