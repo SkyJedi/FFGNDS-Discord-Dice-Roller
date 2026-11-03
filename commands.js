@@ -43,6 +43,7 @@ const commands = [
     new SlashCommandBuilder().setName('invite').setDescription('Get an invite link for this bot.'),
     new SlashCommandBuilder().setName('stats').setDescription('Shows server and member stats.'),
     new SlashCommandBuilder().setName('feedback').setDescription('Send feedback about this bot.'),
+    new SlashCommandBuilder().setName('chipin').setDescription('Get a link to chip in and support this bot.'),
 
     // SW / Genesys only
     new SlashCommandBuilder().setName('character').setDescription('Simple character stat manager (SWRPG/Genesys channels).'),

@@ -4,6 +4,7 @@ const { version } = require('./package.json');
 const config = require('./config');
 const { readData, writeData } = require('./modules/data');
 const modules = require('./modules/');
+const { chipIn } = require('./modules/chipIn');
 const main = require('./index');
 const swCommands = require('./modules/SW.GENESYS/').commands;
 const l5rCommands = require('./modules/L5R/').commands;
@@ -39,6 +40,8 @@ const onInteraction = async ({ interaction, client }) => {
     if (!interaction.isChatInputCommand()) return;
     //a pop-up has to be the very first answer, so /feedback skips the permission checks and deferReply below
     if (interaction.commandName === 'feedback') return interaction.showModal(modules.feedback.feedbackModal());
+    //one private line with no emoji or embed, so it needs none of the checks below either
+    if (interaction.commandName === 'chipin') return chipIn(interaction);
 
     //check to see if external emoji and embeds can be used (not applicable in DMs)
     if (interaction.guild && interaction.channel) {
