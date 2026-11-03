@@ -1,6 +1,7 @@
 const { upperFirst } = require('lodash');
 const { EmbedBuilder, Colors } = require('discord.js');
 const { getParams } = require('../');
+const { CHIP_IN } = require('../chipIn');
 
 const help = ({ interaction }) => {
     //required lazily to avoid a load-order-dependent circular require with ../../index
@@ -128,7 +129,8 @@ const help = ({ interaction }) => {
                  .addFields({ name: `/duty`, value: `gathers all the duty entered with /character and rolls to trigger.` })
                  .addFields({ name: `/species`, value: 'picks a random species.' })
                  .addFields({ name: 'Bot Information', value: 'For more information or help join the [SkyJedi\'s Bot Emporium](https://discord.gg/G8au6FH)' })
-                 .addFields({ name: 'Role playing games by Fantasy Flight Games', value: `[Edge of the Empire](https://www.fantasyflightgames.com/en/products/star-wars-edge-of-the-empire), [Force and Destiny](https://www.fantasyflightgames.com/en/products/star-wars-force-and-destiny), [Age of Rebellion](https://www.fantasyflightgames.com/en/products/star-wars-age-ofrebellion),[Genesys](https://www.fantasyflightgames.com/en/products/genesys), [Legends of the Five Rings](https://www.fantasyflightgames.com/en/legend-of-the-five-rings-roleplaying-game)` });
+                 .addFields({ name: 'Role playing games by Fantasy Flight Games', value: `[Edge of the Empire](https://www.fantasyflightgames.com/en/products/star-wars-edge-of-the-empire), [Force and Destiny](https://www.fantasyflightgames.com/en/products/star-wars-force-and-destiny), [Age of Rebellion](https://www.fantasyflightgames.com/en/products/star-wars-age-ofrebellion),[Genesys](https://www.fantasyflightgames.com/en/products/genesys), [Legends of the Five Rings](https://www.fantasyflightgames.com/en/legend-of-the-five-rings-roleplaying-game)` })
+                 .addFields({ name: 'Like this bot?', value: `[Chip in](${CHIP_IN})` });
             break;
     }
     main.sendMessage({ interaction, embed });

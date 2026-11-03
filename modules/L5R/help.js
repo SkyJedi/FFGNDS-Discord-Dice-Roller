@@ -1,5 +1,6 @@
 const {EmbedBuilder, Colors} = require('discord.js');
 const { getParams } = require('../');
+const { CHIP_IN } = require('../chipIn');
 
 const help = (interaction) => {
 	//required lazily to avoid a load-order-dependent circular require with ../../index
@@ -43,7 +44,8 @@ const help = (interaction) => {
 				.addFields({ name: `/add`, value: `ie /add input:ww - adds specified dice to previous dicepool.` })
 				.addFields({ name: `/reroll`, value: `ie /reroll input:12 - rerolls the first and second dice without modifying the rest of the dicepool` })
 				.addFields({ name: 'More Information', value: 'For more information or help join the [FFG NDS Assistant Bot server](https://discord.gg/G8au6FH)' })
-				.addFields({ name: 'Role playing games by Fantasy Flight Games', value: `[Edge of the Empire](https://www.fantasyflightgames.com/en/products/star-wars-edge-of-the-empire), [Force and Destiny](https://www.fantasyflightgames.com/en/products/star-wars-force-and-destiny), [Age of Rebellion](https://www.fantasyflightgames.com/en/products/star-wars-age-ofrebellion),[Genesys](https://www.fantasyflightgames.com/en/products/genesys), [Legends of the Five Rings](https://www.fantasyflightgames.com/en/legend-of-the-five-rings-roleplaying-game)` });
+				.addFields({ name: 'Role playing games by Fantasy Flight Games', value: `[Edge of the Empire](https://www.fantasyflightgames.com/en/products/star-wars-edge-of-the-empire), [Force and Destiny](https://www.fantasyflightgames.com/en/products/star-wars-force-and-destiny), [Age of Rebellion](https://www.fantasyflightgames.com/en/products/star-wars-age-ofrebellion),[Genesys](https://www.fantasyflightgames.com/en/products/genesys), [Legends of the Five Rings](https://www.fantasyflightgames.com/en/legend-of-the-five-rings-roleplaying-game)` })
+				.addFields({ name: 'Like this bot?', value: `[Chip in](${CHIP_IN})` });
 			break;
 	}
 	main.sendMessage({interaction, embed});
