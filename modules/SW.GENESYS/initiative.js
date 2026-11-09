@@ -107,7 +107,9 @@ const parseOrderString = (order) => {
 
 //Next/Previous/Reset/Modify only make sense once an order exists - Roll and Set are the only
 //ways to create one, so they're the only buttons shown until then.
-const buildMenu = (initiativeOrder, note) => {
+//touched = something was already announced from this menu; it rides on the Done button's customId
+//(init:done:1) so Done knows whether there is anything to wrap up (see menuTouched)
+const buildMenu = (initiativeOrder, note, touched = false) => {
     let text = buildStatusText(initiativeOrder);
     if (note) text = `${note}\n\n${text}`;
     const hasOrder = initiativeOrder.slots.length > 0;
@@ -133,21 +135,29 @@ const buildMenu = (initiativeOrder, note) => {
     rows.push(new ActionRowBuilder().addComponents(manageButtons));
 
     rows.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('init:done').setLabel('Done').setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId(`init:done:${touched ? 1 : 0}`).setLabel('Done').setStyle(ButtonStyle.Primary)
     ));
 
     return { content: '', embeds: [textEmbed(text)], components: rows };
 };
+
+//true when the menu this click came from has already announced a change. Pool screens carry it in
+//their state instead (they have no Done button).
+const menuTouched = (interaction) => (interaction.message?.components || []).some(row =>
+    (row.components || []).some(c => c.customId === 'init:done:1'));
 
 //Every action posts the public readout, then the private ephemeral menu stays up (refreshed) so
 //several rolls/turns can be done without retyping /initiative - deferUpdate() acknowledges the
 //click without touching the menu message, followUp() posts the public readout, then editReply()
 //redraws the menu. Each click hands the bot a fresh interaction token, so the menu keeps working
 //past Discord's 15-minute limit on the original reply. Only Done (keepOpen = false) removes it.
-const closeEphemeralMenu = async (interaction, initiativeOrder, note, keepOpen = true) => {
+//setsUp = Roll/Set/Modify/Reset changed the order itself; Next/Previous only move the turn and
+//already announce it, so they don't make Done post "finished setting up".
+const closeEphemeralMenu = async (interaction, initiativeOrder, note, keepOpen = true, setsUp = false) => {
+    const touched = setsUp || menuTouched(interaction);
     await interaction.deferUpdate();
     await interaction.followUp({ embeds: [publicStatusEmbed(initiativeOrder, note)] });
-    if (keepOpen) await interaction.editReply(buildMenu(initiativeOrder));
+    if (keepOpen) await interaction.editReply(buildMenu(initiativeOrder, undefined, touched));
     else await interaction.deleteReply();
 };
 
@@ -162,7 +172,7 @@ const initiative = async ({ interaction, client }) => {
 
 //NPC/PC is required (rather than optional, like a die color) because every slot needs a type to
 //sort and display - the two toggle buttons in buildPoolMainScreen() double as that selection.
-const emptyPoolState = (channelEmoji) => ({ counts: {}, type: '', channelEmoji });
+const emptyPoolState = (channelEmoji, touched = false) => ({ counts: {}, type: '', channelEmoji, touched });
 
 //single-character codes keep the channel's system (needed for icon lookups) from growing the
 //customId much - see modules/SW.GENESYS/roll.js's encodeState for the same scheme and why it's
@@ -171,13 +181,13 @@ const emptyPoolState = (channelEmoji) => ({ counts: {}, type: '', channelEmoji }
 const CHANNEL_CODES = { swrpg: 's', genesys: 'g', l5r: 'l' };
 const CHANNEL_CODES_REVERSE = { s: 'swrpg', g: 'genesys', l: 'l5r' };
 
-const encodePoolState = (state) => `${ALL_TYPES.map(type => state.counts[type] || 0).join(',')}|${state.type || ''}|${CHANNEL_CODES[state.channelEmoji] || ''}`;
+const encodePoolState = (state) => `${ALL_TYPES.map(type => state.counts[type] || 0).join(',')}|${state.type || ''}|${CHANNEL_CODES[state.channelEmoji] || ''}|${state.touched ? 1 : ''}`;
 
 const decodePoolState = (str) => {
-    const [countsPart, type, channelCode] = (str || '').split('|');
+    const [countsPart, type, channelCode, touchedPart] = (str || '').split('|');
     const counts = {};
     (countsPart || '').split(',').forEach((n, i) => { if (ALL_TYPES[i]) counts[ALL_TYPES[i]] = Math.min(+n || 0, MAX_COUNT); });
-    return { counts, type: type === 'npc' || type === 'pc' ? type : '', channelEmoji: CHANNEL_CODES_REVERSE[channelCode] };
+    return { counts, type: type === 'npc' || type === 'pc' ? type : '', channelEmoji: CHANNEL_CODES_REVERSE[channelCode], touched: touchedPart === '1' };
 };
 
 const buildPoolDiceOrder = (counts) => ALL_TYPES.reduce((diceOrder, type) => diceOrder.concat(Array(counts[type] || 0).fill(type)), []);
@@ -279,7 +289,7 @@ const rollInitiativePool = async ({ interaction, client, state }) => {
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder, true);
     //announce the roll publicly; the private control panel stays up for the next roll
-    await closeEphemeralMenu(interaction, initiativeOrder, note);
+    await closeEphemeralMenu(interaction, initiativeOrder, note, true, true);
 };
 
 //---------------------------------------------------------------- set / modify
@@ -307,7 +317,7 @@ const submitSetModal = async ({ interaction, client }) => {
     const initiativeOrder = initializeInitOrder();
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} sets the initiative order`);
+    await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} sets the initiative order`, true, true);
 };
 
 const submitModifyModal = async ({ interaction, client }) => {
@@ -317,7 +327,7 @@ const submitModifyModal = async ({ interaction, client }) => {
 
     initiativeOrder.slots = parseOrderString(order);
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
-    await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} modifies the initiative order`);
+    await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} modifies the initiative order`, true, true);
 };
 
 //---------------------------------------------------------------- router
@@ -348,7 +358,7 @@ const onComponent = async ({ interaction, client }) => {
     //than deferUpdate()+editReply(), since it easily finishes well within Discord's response window.
     if (action === 'roll') {
         const channelEmoji = await readData(client, asMessageRef(interaction), 'channelEmoji').catch(() => null);
-        await safeUpdate(interaction, (iconsOk) => buildPoolMainScreen(emptyPoolState(channelEmoji), iconsOk, channelEmoji));
+        await safeUpdate(interaction, (iconsOk) => buildPoolMainScreen(emptyPoolState(channelEmoji, menuTouched(interaction)), iconsOk, channelEmoji));
         return;
     }
     if (action.startsWith('poolAdd-')) {
@@ -377,7 +387,7 @@ const onComponent = async ({ interaction, client }) => {
     if (action === 'poolCancel') {
         const messageRef = asMessageRef(interaction);
         const initiativeOrder = await readInitiativeOrder(client, messageRef);
-        await interaction.update(buildMenu(initiativeOrder));
+        await interaction.update(buildMenu(initiativeOrder, undefined, decodePoolState(parts[2]).touched));
         return;
     }
     if (action === 'poolRoll') {
@@ -393,8 +403,14 @@ const onComponent = async ({ interaction, client }) => {
 
     //Done posts a public readout so the table sees who ran /initiative and the order it ended up
     //with, then removes the private menu - same as every other action below
+    //Only when something was announced from this menu; opening /initiative just to press Next/Done
+    //(or nothing) closes it quietly (Tall Tales feedback).
     if (action === 'done') {
-        await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} finished setting up the initiative order`, false);
+        if (parts[2] === '1') await closeEphemeralMenu(interaction, initiativeOrder, `${displayName(interaction)} finished setting up the initiative order`, false);
+        else {
+            await interaction.deferUpdate();
+            await interaction.deleteReply();
+        }
         return;
     }
 
@@ -432,13 +448,13 @@ const onComponent = async ({ interaction, client }) => {
 
     //a no-op (already at the starting turn) stays private - nothing actually happened
     if (!changed) {
-        await interaction.update(buildMenu(initiativeOrder, note));
+        await interaction.update(buildMenu(initiativeOrder, note, menuTouched(interaction)));
         return;
     }
 
     writeData(client, messageRef, 'initiativeOrder', initiativeOrder);
     //announce the change publicly; the private control panel stays up
-    await closeEphemeralMenu(interaction, initiativeOrder, note);
+    await closeEphemeralMenu(interaction, initiativeOrder, note, true, action === 'reset');
 };
 
 exports.initiative = initiative;
